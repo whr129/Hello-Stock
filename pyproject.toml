@@ -1,0 +1,55 @@
+[project]
+name = "news-agent"
+version = "0.1.0"
+description = "Telegram news and stock intelligence bot powered by LangGraph, Postgres, and pgvector."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "alembic>=1.13.0",
+    "asyncpg>=0.29.0",
+    "feedparser>=6.0.11",
+    "greenlet>=3.0.0",
+    "langchain-core>=0.3.0",
+    "langgraph>=0.2.0",
+    "numpy>=1.26.0",
+    "openai>=1.40.0",
+    "pandas>=2.2.0",
+    "pgvector>=0.3.0",
+    "psycopg[binary]>=3.2.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "python-dotenv>=1.0.1",
+    "python-telegram-bot>=21.4",
+    "sqlalchemy>=2.0.30",
+    "trafilatura>=1.12.0",
+    "yfinance>=0.2.40",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.5.0",
+]
+
+[project.scripts]
+news-agent = "news_agent.main:main"
+news-agent-scheduler = "news_agent.scheduler.jobs:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/news_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
