@@ -1,8 +1,10 @@
 import asyncio
 import logging
+from datetime import UTC, datetime
 
 from news_agent.graph.scheduler_graph import build_scheduler_graph
 from news_agent.logging import configure_logging
+from news_agent.scheduler.service import run_scheduler_tick
 from news_agent.settings import Settings, get_settings
 from news_agent.storage.database import create_session_factory
 
@@ -30,15 +32,16 @@ async def run_scheduler_once(job_type: str = "manual", settings: Settings | None
 async def scheduler_loop(settings: Settings) -> None:
     logger.info(
         "scheduler loop starting",
-        extra={"interval_seconds": settings.news_fetch_interval_seconds},
+        extra={"tick_seconds": settings.scheduler_tick_seconds},
     )
+    last_refresh_at: datetime | None = None
     while True:
-        await run_scheduler_once("news_refresh", settings)
+        last_refresh_at = await run_scheduler_tick(settings, last_refresh_at)
         logger.info(
             "scheduler sleeping",
-            extra={"interval_seconds": settings.news_fetch_interval_seconds},
+            extra={"interval_seconds": settings.scheduler_tick_seconds},
         )
-        await asyncio.sleep(settings.news_fetch_interval_seconds)
+        await asyncio.sleep(settings.scheduler_tick_seconds)
 
 
 def main() -> None:

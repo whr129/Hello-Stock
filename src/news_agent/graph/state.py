@@ -1,43 +1,9 @@
-from typing import Any, Literal, TypedDict
+from typing import Any, TypedDict
 
-Intent = Literal[
-    "brief",
-    "stocks",
-    "watch",
-    "unwatch",
-    "topics",
-    "local",
-    "sources",
-    "addsource",
-    "removesource",
-    "memory",
-    "forget",
-    "resetmemory",
-    "help",
-    "general_chat",
-    "unknown",
-]
+from news_agent.app.state import Intent, SupervisorState as NewsAgentState
 
-
-class NewsAgentState(TypedDict, total=False):
-    telegram_user_id: int
-    chat_id: int
-    message_text: str
-    command: str
-    args: list[str]
-    intent: Intent
-    user_id: int
-    local_region: str
-    topics: list[str]
-    watched_tickers: list[str]
-    short_term_memory: dict[str, Any]
-    long_term_memory: list[str]
-    retrieved_articles: list[dict[str, Any]]
-    retrieved_summaries: list[str]
-    market_context: list[dict[str, Any]]
-    response: str
-    errors: list[str]
-    metadata: dict[str, Any]
+Subagent = str
+ToolName = str
 
 
 class SchedulerState(TypedDict, total=False):

@@ -12,6 +12,8 @@ class FeedArticle:
     url: str
     published_at: datetime | None
     summary: str | None
+    author: str | None
+    raw_payload: dict
 
 
 def parse_feed(url: str, timeout_seconds: int = 15) -> list[FeedArticle]:
@@ -36,6 +38,8 @@ def parse_feed(url: str, timeout_seconds: int = 15) -> list[FeedArticle]:
                 url=entry.get("link", ""),
                 published_at=published_at,
                 summary=entry.get("summary"),
+                author=entry.get("author"),
+                raw_payload=dict(entry),
             )
         )
     return [article for article in articles if article.url]

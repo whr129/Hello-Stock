@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     )
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
+    general_search_model: str = Field(default="", alias="GENERAL_SEARCH_MODEL")
+    general_search_max_sources: int = Field(default=5, alias="GENERAL_SEARCH_MAX_SOURCES")
+    general_search_timeout_seconds: int = Field(
+        default=30, alias="GENERAL_SEARCH_TIMEOUT_SECONDS"
+    )
     embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
     news_fetch_interval_seconds: int = Field(default=900, alias="NEWS_FETCH_INTERVAL_SECONDS")
     market_refresh_interval_seconds: int = Field(
@@ -23,6 +28,13 @@ class Settings(BaseSettings):
     market_fetch_timeout_seconds: int = Field(default=20, alias="MARKET_FETCH_TIMEOUT_SECONDS")
     llm_timeout_seconds: int = Field(default=30, alias="LLM_TIMEOUT_SECONDS")
     default_local_region: str = Field(default="Waterloo", alias="DEFAULT_LOCAL_REGION")
+    scheduler_tick_seconds: int = Field(default=60, alias="SCHEDULER_TICK_SECONDS")
+    news_freshness_hours: int = Field(default=24, alias="NEWS_FRESHNESS_HOURS")
+    summary_freshness_hours: int = Field(default=24, alias="SUMMARY_FRESHNESS_HOURS")
+    snapshot_freshness_minutes: int = Field(default=15, alias="SNAPSHOT_FRESHNESS_MINUTES")
+    article_retention_days: int = Field(default=30, alias="ARTICLE_RETENTION_DAYS")
+    snapshot_retention_days: int = Field(default=7, alias="SNAPSHOT_RETENTION_DAYS")
+    job_run_retention_days: int = Field(default=30, alias="JOB_RUN_RETENTION_DAYS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     @property

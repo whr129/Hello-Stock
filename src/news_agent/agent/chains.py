@@ -40,12 +40,33 @@ def build_stocks_response(tickers: list[str], market_context: list[dict[str, Any
     for ticker in tickers:
         snapshot = snapshot_by_symbol.get(ticker)
         if not snapshot:
-            lines.append(f"- {ticker}: no recent market snapshot yet.")
+            lines.append(f"- {ticker}: no fresh market snapshot is available yet.")
             continue
         indicators = snapshot.get("indicators") or {}
-        lines.append(
-            f"- {ticker}: price {snapshot.get('price', 'n/a')}, "
-            f"change {snapshot.get('percent_change', 'n/a')}%, "
-            f"RSI {indicators.get('rsi', 'n/a')}, trend {indicators.get('trend', 'n/a')}."
+        price = _format_number(snapshot.get("price"))
+        change = snapshot.get("percent_change")
+        change_text = f"{change:.2f}%" if isinstance(change, (int, float)) else "n/a"
+        source = snapshot.get("source", "stored")
+        lines.extend(
+            [
+                f"\n{ticker}",
+                f"- Latest price: {price} ({source})",
+                f"- Performance: {change_text} vs previous close",
+                (
+                    "- Technicals: "
+                    f"trend {indicators.get('trend', 'n/a')}, "
+                    f"RSI {indicators.get('rsi', 'n/a')}, "
+                    f"SMA20 {_format_number(indicators.get('sma_20'))}, "
+                    f"SMA50 {_format_number(indicators.get('sma_50'))}, "
+                    f"MACD {_format_number(indicators.get('macd'))}"
+                ),
+                "- Note: this is informational context, not a buy/sell recommendation.",
+            ]
         )
     return "\n".join(lines)
+
+
+def _format_number(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        return f"{value:.2f}"
+    return "n/a"

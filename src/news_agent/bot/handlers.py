@@ -14,7 +14,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "message_text": update.message.text or "",
         }
     )
-    await update.message.reply_text(result.get("response", "I could not generate a response."))
+    await update.message.reply_text(
+        result.get("final_response") or result.get("response", "I could not generate a response.")
+    )
 
 
 def register_handlers(application: Application) -> None:
@@ -29,10 +31,19 @@ def register_handlers(application: Application) -> None:
         "local",
         "sources",
         "addsource",
+        "sourceconfig",
+        "sourcefields",
+        "sourcetest",
         "removesource",
+        "refresh",
         "memory",
         "forget",
         "resetmemory",
+        "timezone",
+        "recaptime",
+        "recapoff",
+        "recapstatus",
+        "skills",
     ]
     for command in commands:
         application.add_handler(CommandHandler(command, handle_message))

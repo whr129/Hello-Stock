@@ -24,6 +24,14 @@ from news_agent.storage.models import (
 )
 
 
+def build_source_locator(provider: str, external_account: str) -> str:
+    normalized_provider = provider.strip().lower()
+    normalized_account = external_account.strip()
+    if normalized_provider == "rss":
+        return normalized_account
+    return f"{normalized_provider}://{normalized_account}"
+
+
 class UserRepository:
     def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self.session = session
@@ -55,6 +63,12 @@ class UserRepository:
         result = await self.session.execute(select(User).where(User.id == user_id))
         return result.scalar_one_or_none()
 
+    async def set_timezone(self, user_id: int, timezone: str) -> User | None:
+        await self.session.execute(update(User).where(User.id == user_id).values(timezone=timezone))
+        await self.session.flush()
+        result = await self.session.execute(select(User).where(User.id == user_id))
+        return result.scalar_one_or_none()
+
 
 class PreferenceRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -74,6 +88,32 @@ class PreferenceRepository:
         preference.topics = [topic.lower() for topic in topics]
         await self.session.flush()
         return preference
+
+    async def set_delivery_time(self, user_id: int, delivery_time: str) -> Preference:
+        preference = await self.get_for_user(user_id)
+        preference.delivery_time = delivery_time
+        await self.session.flush()
+        return preference
+
+    async def clear_delivery_time(self, user_id: int) -> Preference:
+        preference = await self.get_for_user(user_id)
+        preference.delivery_time = None
+        await self.session.flush()
+        return preference
+
+    async def mark_daily_recap_sent(self, user_id: int, sent_at: datetime) -> Preference:
+        preference = await self.get_for_user(user_id)
+        preference.last_daily_recap_sent_at = sent_at
+        await self.session.flush()
+        return preference
+
+    async def list_with_delivery_time(self) -> list[tuple[User, Preference]]:
+        result = await self.session.execute(
+            select(User, Preference)
+            .join(Preference, Preference.user_id == User.id)
+            .where(Preference.delivery_time.is_not(None))
+        )
+        return list(result.all())
 
 
 class TickerRepository:
@@ -134,17 +174,51 @@ class SourceRepository:
         )
         return list(result.scalars())
 
+    async def get_by_id(self, source_id: int) -> Source | None:
+        result = await self.session.execute(select(Source).where(Source.id == source_id))
+        return result.scalar_one_or_none()
+
     async def add_source(
-        self, name: str, url: str, category: str = "general", owner_user_id: int | None = None
+        self,
+        *,
+        name: str,
+        provider: str,
+        external_account: str,
+        category: str = "general",
+        owner_user_id: int | None = None,
+        config: dict | None = None,
+        field_mapping: dict | None = None,
+        fetch_mode: str | None = None,
     ) -> Source:
-        existing = await self.session.execute(select(Source).where(Source.url == url))
+        normalized_provider = provider.strip().lower()
+        normalized_account = external_account.strip()
+        locator = build_source_locator(normalized_provider, normalized_account)
+        existing = await self.session.execute(select(Source).where(Source.url == locator))
         source = existing.scalar_one_or_none()
         if source:
             source.enabled = True
+            source.provider = normalized_provider
+            source.external_account = normalized_account
+            if config:
+                source.config = {**dict(source.config or {}), **config}
+            if field_mapping:
+                source.field_mapping = {**dict(source.field_mapping or {}), **field_mapping}
+            if fetch_mode is not None:
+                source.fetch_mode = fetch_mode
             await self.session.flush()
             return source
 
-        source = Source(name=name, url=url, category=category, owner_user_id=owner_user_id)
+        source = Source(
+            name=name,
+            url=locator,
+            provider=normalized_provider,
+            external_account=normalized_account,
+            config=dict(config or {}),
+            field_mapping=dict(field_mapping or {}),
+            fetch_mode=fetch_mode or ("rss" if normalized_provider == "rss" else None),
+            category=category,
+            owner_user_id=owner_user_id,
+        )
         self.session.add(source)
         await self.session.flush()
         return source
@@ -160,20 +234,74 @@ class SourceRepository:
         await self.session.flush()
         return result.scalar_one_or_none() is not None
 
+    async def update_config_field(self, source_id: int, key: str, value: object) -> Source | None:
+        source = await self.get_by_id(source_id)
+        if source is None:
+            return None
+        config = dict(source.config or {})
+        config[key] = value
+        source.config = config
+        await self.session.flush()
+        return source
+
+    async def update_field_mapping(self, source_id: int, key: str, value: str) -> Source | None:
+        source = await self.get_by_id(source_id)
+        if source is None:
+            return None
+        field_mapping = dict(source.field_mapping or {})
+        field_mapping[key] = value
+        source.field_mapping = field_mapping
+        await self.session.flush()
+        return source
+
+    async def mark_fetch_result(
+        self,
+        source_id: int,
+        *,
+        fetched_at: datetime,
+        success: bool,
+        error: str | None = None,
+    ) -> None:
+        source = await self.get_by_id(source_id)
+        if source is None:
+            return
+        source.last_fetched_at = fetched_at
+        if success:
+            source.last_success_at = fetched_at
+            source.last_error = None
+        else:
+            source.last_error = error
+        await self.session.flush()
+
     async def ensure_default_sources(self) -> list[Source]:
         defaults = [
-            ("Reuters Business", "https://feeds.reuters.com/reuters/businessNews", "markets"),
-            ("BBC World", "https://feeds.bbci.co.uk/news/world/rss.xml", "world"),
-            ("CBC Top Stories", "https://www.cbc.ca/cmlink/rss-topstories", "local"),
+            (
+                "Reuters Business",
+                "rss",
+                "https://feeds.reuters.com/reuters/businessNews",
+                "markets",
+            ),
+            ("BBC World", "rss", "https://feeds.bbci.co.uk/news/world/rss.xml", "world"),
+            ("CBC Top Stories", "rss", "https://www.cbc.ca/cmlink/rss-topstories", "local"),
             (
                 "MarketWatch Top Stories",
+                "rss",
                 "https://feeds.marketwatch.com/marketwatch/topstories/",
                 "markets",
             ),
         ]
         sources: list[Source] = []
-        for name, url, category in defaults:
-            sources.append(await self.add_source(name=name, url=url, category=category))
+        for name, provider, external_account, category in defaults:
+            sources.append(
+                await self.add_source(
+                    name=name,
+                    provider=provider,
+                    external_account=external_account,
+                    category=category,
+                    config={"feed_url": external_account},
+                    fetch_mode="rss",
+                )
+            )
         return sources
 
 
@@ -191,6 +319,7 @@ class ArticleRepository:
         category: str,
         published_at: datetime | None = None,
         extracted_text: str | None = None,
+        author: str | None = None,
         related_tickers: Sequence[str] | None = None,
     ) -> tuple[Article, bool]:
         result = await self.session.execute(select(Article).where(Article.url == url))
@@ -202,6 +331,7 @@ class ArticleRepository:
             source_id=source_id,
             url=url,
             title=title,
+            author=author,
             published_at=published_at,
             content_hash=content_hash,
             category=category,
@@ -221,6 +351,14 @@ class ArticleRepository:
             .limit(limit)
         )
         return list(result.scalars())
+
+    async def delete_created_before(self, cutoff: datetime) -> int:
+        result = await self.session.execute(
+            delete(Article).where(Article.created_at < cutoff).returning(Article.id)
+        )
+        await self.session.flush()
+        rows = result.scalars().all()
+        return len(rows)
 
 
 class MarketRepository:
@@ -245,6 +383,14 @@ class MarketRepository:
         self.session.add(snapshot)
         await self.session.flush()
         return snapshot
+
+    async def delete_captured_before(self, cutoff: datetime) -> int:
+        result = await self.session.execute(
+            delete(MarketSnapshot).where(MarketSnapshot.captured_at < cutoff).returning(MarketSnapshot.id)
+        )
+        await self.session.flush()
+        rows = result.scalars().all()
+        return len(rows)
 
 
 class SummaryRepository:
@@ -278,6 +424,14 @@ class SummaryRepository:
         self.session.add(summary)
         await self.session.flush()
         return summary
+
+    async def delete_created_before(self, cutoff: datetime) -> int:
+        result = await self.session.execute(
+            delete(Summary).where(Summary.created_at < cutoff).returning(Summary.id)
+        )
+        await self.session.flush()
+        rows = result.scalars().all()
+        return len(rows)
 
 
 class EmbeddingRepository:
@@ -338,6 +492,35 @@ class JobRepository:
         job.error_message = error_message
         job.completed_at = datetime.now(UTC)
         await self.session.flush()
+
+    async def has_running_job(self) -> bool:
+        result = await self.session.execute(
+            select(JobRun.id).where(JobRun.status == "running").limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def recover_stale_running_jobs(self, cutoff: datetime) -> int:
+        result = await self.session.execute(
+            update(JobRun)
+            .where(JobRun.status == "running")
+            .where(JobRun.started_at < cutoff)
+            .values(
+                status="abandoned",
+                error_message="Recovered stale running job",
+                completed_at=datetime.now(UTC),
+            )
+            .returning(JobRun.id)
+        )
+        await self.session.flush()
+        return len(result.scalars().all())
+
+    async def delete_started_before(self, cutoff: datetime) -> int:
+        result = await self.session.execute(
+            delete(JobRun).where(JobRun.started_at < cutoff).returning(JobRun.id)
+        )
+        await self.session.flush()
+        rows = result.scalars().all()
+        return len(rows)
 
 
 class MemoryRepository:

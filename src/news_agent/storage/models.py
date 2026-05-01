@@ -62,6 +62,9 @@ class Preference(Base):
     )
     digest_style: Mapped[str] = mapped_column(String(64), default="concise")
     delivery_time: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    last_daily_recap_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     risk_context: Mapped[str] = mapped_column(String(64), default="informational")
 
     user: Mapped[User] = relationship(back_populates="preferences")
@@ -74,9 +77,17 @@ class Source(Base):
     owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(255))
     url: Mapped[str] = mapped_column(Text, unique=True)
+    provider: Mapped[str] = mapped_column(String(32), default="rss", index=True)
+    external_account: Mapped[str] = mapped_column(Text)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    field_mapping: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    fetch_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
     category: Mapped[str] = mapped_column(String(64), default="general")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     trust_score: Mapped[float] = mapped_column(Float, default=0.5)
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

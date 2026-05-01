@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 
@@ -10,15 +11,17 @@ from news_agent.agent.guardrails import enforce_financial_guardrails
 from news_agent.agent.intent import IntentClassifier
 from news_agent.agent.ranking import rank_articles
 from news_agent.agent.react import ReActResponder
+from news_agent.agent.router import route_intent
+from news_agent.agent.tools import ToolRegistry
 from news_agent.graph.state import NewsAgentState, SchedulerState
 from news_agent.ingestion.dedupe import content_hash
-from news_agent.ingestion.feeds import parse_feed
+from news_agent.ingestion.providers import IngestProviderRegistry
 from news_agent.markets.yahoo import YahooMarketDataProvider
 from news_agent.memory.embeddings import EmbeddingService
 from news_agent.memory.long_term import memory_from_user_text, should_store_memory
 from news_agent.memory.short_term import append_message, expiry
 from news_agent.settings import Settings
-from news_agent.storage.models import JobRun
+from news_agent.storage.models import JobRun, Source
 from news_agent.storage.repositories import (
     ArticleRepository,
     EmbeddingRepository,
@@ -38,6 +41,23 @@ from news_agent.summarizer.service import Summarizer, SummaryRequest
 logger = logging.getLogger(__name__)
 
 
+def _source_dict_to_model(payload: dict[str, Any]) -> Source:
+    return Source(
+        id=payload["id"],
+        owner_user_id=payload.get("owner_user_id"),
+        name=payload["name"],
+        url=payload["url"],
+        provider=payload["provider"],
+        external_account=payload["external_account"],
+        config=dict(payload.get("config") or {}),
+        field_mapping=dict(payload.get("field_mapping") or {}),
+        fetch_mode=payload.get("fetch_mode"),
+        category=payload["category"],
+        enabled=payload.get("enabled", True),
+        trust_score=payload.get("trust_score", 0.5),
+    )
+
+
 class GraphNodes:
     def __init__(self, session_factory: async_sessionmaker, settings: Settings) -> None:
         self.session_factory = session_factory
@@ -45,6 +65,13 @@ class GraphNodes:
         self.embedding_service = EmbeddingService(settings)
         self.react_responder = ReActResponder(settings)
         self.intent_classifier = IntentClassifier(settings)
+        self.market_provider = YahooMarketDataProvider()
+        self.tool_registry = ToolRegistry(
+            session_factory,
+            settings,
+            self.market_provider,
+            self.react_responder,
+        )
 
     async def parse_intent(self, state: NewsAgentState) -> NewsAgentState:
         message_text = state.get("message_text", "")
@@ -84,6 +111,36 @@ class GraphNodes:
             "short_term_memory": short_term_state,
             "long_term_memory": [memory.memory_text for memory in memories],
         }
+
+    async def route_request(self, state: NewsAgentState) -> NewsAgentState:
+        route = route_intent(state.get("intent", "unknown"))
+        logger.info(
+            "chat routed to subagent=%s tool=%s needs_context=%s",
+            route.subagent,
+            route.tool_name,
+            route.needs_context,
+        )
+        return {
+            **state,
+            "subagent": route.subagent,
+            "tool_name": route.tool_name,
+            "needs_context": route.needs_context,
+        }
+
+    async def apply_tool_or_skill(self, state: NewsAgentState) -> NewsAgentState:
+        result = await self.tool_registry.run(state["tool_name"], state)
+        next_state = {
+            **state,
+            **result.updates,
+            "tool_result": {
+                "subagent": state.get("subagent"),
+                "tool_name": state.get("tool_name"),
+                "has_response": result.response is not None,
+            },
+        }
+        if result.response is not None:
+            next_state["response"] = result.response
+        return next_state
 
     async def apply_command(self, state: NewsAgentState) -> NewsAgentState:
         intent = state.get("intent", "unknown")
@@ -264,6 +321,45 @@ class GraphNodes:
         )
         return {**state, "retrieved_articles": ranked}
 
+    async def compose_response(self, state: NewsAgentState) -> NewsAgentState:
+        if state.get("response"):
+            return state
+
+        tool_name = state.get("tool_name")
+        if tool_name == "news_brief":
+            response = build_brief_response(
+                state.get("retrieved_articles", []),
+                state.get("retrieved_summaries", []),
+                state.get("market_context", []),
+                state.get("local_region", self.settings.default_local_region),
+            )
+            return {**state, "response": response}
+
+        if tool_name == "general_chat":
+            result = await self.react_responder.respond(
+                state.get("message_text", ""),
+                {
+                    "articles": state.get("retrieved_articles", []),
+                    "summaries": state.get("retrieved_summaries", []),
+                    "market_context": state.get("market_context", []),
+                    "memories": state.get("long_term_memory", []),
+                    "recent_messages": state.get("short_term_memory", {}).get("messages", []),
+                    "tickers": state.get("watched_tickers", []),
+                    "local_region": state.get("local_region"),
+                },
+            )
+            metadata = {
+                **state.get("metadata", {}),
+                "react_action": result.action,
+                "react_observation": result.observation,
+            }
+            return {**state, "response": result.answer, "metadata": metadata}
+
+        return {
+            **state,
+            "response": "I can help with news briefs, stock context, sources, topics, and memory.",
+        }
+
     async def generate_response(self, state: NewsAgentState) -> NewsAgentState:
         intent = state.get("intent", "unknown")
         if state.get("response"):
@@ -347,6 +443,7 @@ class SchedulerNodes:
         self.market_provider = YahooMarketDataProvider()
         self.summarizer = Summarizer(settings)
         self.embedding_service = EmbeddingService(settings)
+        self.ingest_registry = IngestProviderRegistry()
 
     async def _run_blocking_with_timeout(self, label: str, func, timeout_seconds: int):
         started_at = perf_counter()
@@ -387,6 +484,13 @@ class SchedulerNodes:
                 "id": source.id,
                 "name": source.name,
                 "url": source.url,
+                "provider": source.provider,
+                "external_account": source.external_account,
+                "config": dict(source.config or {}),
+                "field_mapping": dict(source.field_mapping or {}),
+                "fetch_mode": source.fetch_mode,
+                "enabled": source.enabled,
+                "trust_score": source.trust_score,
                 "category": source.category,
             }
             for source in sources
@@ -410,6 +514,7 @@ class SchedulerNodes:
     async def fetch_parallel(self, state: SchedulerState) -> SchedulerState:
         fetched_articles: list[dict[str, Any]] = []
         errors = list(state.get("errors", []))
+        provider_counts: dict[str, int] = {}
         logger.info(
             "scheduler fetching feeds",
             extra={"source_count": len(state.get("due_sources", []))},
@@ -423,17 +528,19 @@ class SchedulerNodes:
                     source["url"],
                     self.settings.rss_fetch_timeout_seconds,
                 )
-                source_url = source["url"]
+                provider = self.ingest_registry.get(source["provider"])
+                source_payload = dict(source)
                 articles = await self._run_blocking_with_timeout(
-                    label=f"feed source={source['name']}",
-                    func=lambda url=source_url: parse_feed(
-                        url,
+                    label=f"source source={source['name']}",
+                    func=lambda payload=source_payload, provider=provider: provider.fetch_items(
+                        _source_dict_to_model(payload),
                         timeout_seconds=self.settings.rss_fetch_timeout_seconds,
                     ),
                     timeout_seconds=self.settings.rss_fetch_timeout_seconds + 2,
                 )
+                provider_counts[source["provider"]] = provider_counts.get(source["provider"], 0) + len(articles)
                 logger.info(
-                    "scheduler fetched feed source=%s articles=%s",
+                    "scheduler fetched source source=%s articles=%s",
                     source["name"],
                     len(articles),
                 )
@@ -442,20 +549,37 @@ class SchedulerNodes:
                         {
                             "source_id": source["id"],
                             "source_name": source["name"],
+                            "provider": source["provider"],
                             "category": source["category"],
                             "title": article.title,
                             "url": article.url,
                             "published_at": article.published_at,
-                            "summary": article.summary,
+                            "summary": article.body_text,
+                            "author": article.author,
                         }
                     )
+                async with self.session_factory() as session:
+                    await SourceRepository(session).mark_fetch_result(
+                        source["id"],
+                        fetched_at=datetime.now(UTC),
+                        success=True,
+                    )
+                    await session.commit()
             except Exception as exc:
                 logger.warning(
-                    "scheduler feed fetch failed source=%s error=%s",
+                    "scheduler source fetch failed source=%s error=%s",
                     source["name"],
                     exc,
                 )
                 errors.append(f"{source['name']}: {exc}")
+                async with self.session_factory() as session:
+                    await SourceRepository(session).mark_fetch_result(
+                        source["id"],
+                        fetched_at=datetime.now(UTC),
+                        success=False,
+                        error=str(exc),
+                    )
+                    await session.commit()
 
         market_snapshots: list[dict[str, Any]] = []
         logger.info(
@@ -510,6 +634,7 @@ class SchedulerNodes:
             "fetched_articles": fetched_articles,
             "market_snapshots": market_snapshots,
             "errors": errors,
+            "metadata": {**state.get("metadata", {}), "provider_counts": provider_counts},
         }
 
     async def normalize_dedupe(self, state: SchedulerState) -> SchedulerState:
@@ -538,6 +663,7 @@ class SchedulerNodes:
                     content_hash=content_hash(title, item.get("summary"), item["url"]),
                     category=item["category"],
                     extracted_text=item.get("summary"),
+                    author=item.get("author"),
                     related_tickers=related_tickers,
                 )
                 if created:
@@ -560,7 +686,11 @@ class SchedulerNodes:
 
             await session.commit()
 
-        metadata = {**state.get("metadata", {}), "saved_article_count": len(saved_articles)}
+        metadata = {
+            **state.get("metadata", {}),
+            "saved_article_count": len(saved_articles),
+            "market_snapshot_count": len(state.get("market_snapshots", [])),
+        }
         logger.info(
             "scheduler persisted fetched data",
             extra={
