@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 from telegram import Bot
 
 from news_agent.agent.chains import build_brief_response
+from news_agent.memory.consolidation import MemoryConsolidationService
 from news_agent.settings import Settings
 from news_agent.storage.database import create_session_factory
 from news_agent.storage.models import User
@@ -219,6 +220,7 @@ class DailyRecapService:
 
 async def run_scheduler_tick(settings: Settings, last_refresh_at: datetime | None) -> datetime:
     control = SchedulerControlService(settings)
+    memory_service = MemoryConsolidationService(control.session_factory, settings)
     now = datetime.now(UTC)
     refresh_due = last_refresh_at is None or (
         now - last_refresh_at
@@ -228,5 +230,6 @@ async def run_scheduler_tick(settings: Settings, last_refresh_at: datetime | Non
         last_refresh_at = now
     recap_service = DailyRecapService(settings)
     await recap_service.send_due_recaps(now=now)
+    await memory_service.process_due_jobs()
     await control.cleanup_expired_content()
     return last_refresh_at or now

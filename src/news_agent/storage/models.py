@@ -37,6 +37,7 @@ class User(Base):
     telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     timezone: Mapped[str] = mapped_column(String(64), default="America/Toronto")
     local_region: Mapped[str] = mapped_column(String(128), default="Waterloo")
+    memory_cursor_event_id: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -189,8 +190,15 @@ class LongTermMemory(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     memory_type: Mapped[str] = mapped_column(String(32), default=MemoryType.LEARNED.value)
     memory_text: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(64), default="general")
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
     source: Mapped[str] = mapped_column(String(64), default="bot")
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    source_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("memory_consolidation_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -205,6 +213,34 @@ class MemoryEmbedding(Base):
     embedding: Mapped[list[float]] = mapped_column(Vector(1536))
     embedding_model: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ConversationEvent(Base):
+    __tablename__ = "conversation_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    role: Mapped[str] = mapped_column(String(16), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    event_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MemoryConsolidationJob(Base):
+    __tablename__ = "memory_consolidation_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    source_start_event_id: Mapped[int] = mapped_column(Integer)
+    source_end_event_id: Mapped[int] = mapped_column(Integer)
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Feedback(Base):

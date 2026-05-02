@@ -1,4 +1,7 @@
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
+
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
 
 Intent = Literal[
     "brief",
@@ -85,6 +88,7 @@ class SupervisorState(TypedDict, total=False):
     route: RouteState
     pending_agents: list[AgentName]
     completed_agents: list[AgentName]
+    messages: Annotated[list[AnyMessage], add_messages]
     user_context: UserContext
     news_result: AgentResult
     market_result: AgentResult

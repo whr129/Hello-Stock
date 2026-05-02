@@ -1,6 +1,6 @@
 # Hello Stock
 
-Telegram assistant for personalized news, stock snapshots, technical analysis, runtime debugging, and general web questions. The project uses a LangGraph supervisor, Postgres + pgvector, and OpenAI for routing, summarization, embeddings, and web search.
+Telegram assistant for personalized news, stock snapshots, technical analysis, runtime debugging, and general web questions. The project uses a LangGraph supervisor, Postgres + pgvector, and OpenAI for routing, summarization, embeddings, web search, and memory consolidation.
 
 ## What It Does
 
@@ -9,8 +9,9 @@ Telegram assistant for personalized news, stock snapshots, technical analysis, r
   - `news_agent` for briefs, topics, local preferences, source management, recap settings, and memory tools.
   - `market_agent` for watchlists, live quotes, and lightweight technical analysis.
   - `runtime_agent` for refresh inspection, trace lookup, error review, alert summaries, and calling-history debugging.
+- Uses LangGraph-style short-term memory per chat thread and an async long-term memory pipeline backed by a vector store.
 - Answers off-domain or stale-data queries with OpenAI web search.
-- Runs a scheduler that refreshes source content, market snapshots, summaries, daily recaps, runtime traces, alerts, and retention cleanup.
+- Runs a scheduler that refreshes source content, market snapshots, summaries, daily recaps, long-term memory jobs, runtime traces, alerts, and retention cleanup.
 
 ## Stack
 
@@ -39,7 +40,7 @@ flowchart TD
     runtime --> merge
     search --> merge
     merge --> guardrails[financial guardrails]
-    guardrails --> persist[persist memory + runtime state]
+    guardrails --> persist[persist transcript + memory + runtime state]
     persist --> reply[Telegram reply]
 ```
 
@@ -51,7 +52,8 @@ flowchart TD
     refresh -->|yes| fetch[fetch sources + market snapshots]
     fetch --> store[dedupe and persist]
     store --> summarize[precompute summaries + embeddings]
-    summarize --> trace[persist run + step traces]
+    summarize --> memory[memory consolidation jobs]
+    memory --> trace[persist run + step traces]
     trace --> recap[send due daily recaps]
     recap --> alerts[push runtime alerts]
     alerts --> cleanup[retention cleanup]
@@ -74,6 +76,17 @@ Required `.env` values:
 TELEGRAM_BOT_TOKEN=
 DATABASE_URL=postgresql+asyncpg://news_agent:news_agent@localhost:5432/news_agent
 OPENAI_API_KEY=
+```
+
+Useful optional memory settings:
+
+```bash
+SHORT_TERM_MEMORY_WINDOW_SIZE=20
+SHORT_TERM_MEMORY_EXPIRY_MINUTES=60
+LONG_TERM_MEMORY_BATCH_SIZE=20
+LONG_TERM_MEMORY_TOP_K=5
+MEMORY_CANDIDATES_PER_BATCH=6
+MEMORY_JOB_MAX_RETRIES=3
 ```
 
 ## Run
@@ -101,6 +114,7 @@ PYTHONPATH=src .venv/bin/ruff check .
 
 - `src/news_agent/app/supervisor.py` is the main LangGraph entrypoint.
 - `src/news_agent/domains/news/`, `domains/market/`, and `domains/runtime/` hold the subagents.
+- `src/news_agent/memory/` contains the short-term message-state helpers and the async long-term memory consolidation service.
 - `src/news_agent/observability/` records runtime runs, ordered step traces, errors, and alert deliveries.
 - `src/news_agent/graph/chat_graph.py` remains a compatibility entrypoint that delegates to the supervisor graph.
 
@@ -154,3 +168,14 @@ The runtime layer records:
 - normalized runtime errors linked to a run and step
 
 Use `/runtime` for the latest summary, `/job` for one run, `/trace` for the ordered call sequence, and `/step` to inspect one refresh or provider step during debugging.
+
+## Memory System
+
+Short-term memory is maintained per chat thread as LangGraph-style message state and persisted with a rolling window. `/memory` shows the recent thread context from that state.
+
+Long-term memory is no longer stored inline on every message. The bot writes a conversation transcript, and the scheduler runs an async memory job after every 20 new user messages for a user. That job:
+- extracts durable atomic memory candidates with an LLM
+- compares them against existing vector memories
+- decides whether to add, update, or skip each candidate
+
+Long-term memory retrieval is semantic and vector-backed rather than “latest rows only.”

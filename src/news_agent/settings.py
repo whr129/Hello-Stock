@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     article_retention_days: int = Field(default=30, alias="ARTICLE_RETENTION_DAYS")
     snapshot_retention_days: int = Field(default=7, alias="SNAPSHOT_RETENTION_DAYS")
     job_run_retention_days: int = Field(default=30, alias="JOB_RUN_RETENTION_DAYS")
+    short_term_memory_window_size: int = Field(default=20, alias="SHORT_TERM_MEMORY_WINDOW_SIZE")
+    short_term_memory_expiry_minutes: int = Field(
+        default=60,
+        alias="SHORT_TERM_MEMORY_EXPIRY_MINUTES",
+    )
+    long_term_memory_batch_size: int = Field(default=20, alias="LONG_TERM_MEMORY_BATCH_SIZE")
+    long_term_memory_top_k: int = Field(default=5, alias="LONG_TERM_MEMORY_TOP_K")
+    memory_candidates_per_batch: int = Field(default=6, alias="MEMORY_CANDIDATES_PER_BATCH")
+    memory_job_max_retries: int = Field(default=3, alias="MEMORY_JOB_MAX_RETRIES")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     @property
