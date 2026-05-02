@@ -13,6 +13,7 @@ from news_agent.storage.repositories import (
     JobRepository,
     MarketRepository,
     PreferenceRepository,
+    RuntimeRunRepository,
     SummaryRepository,
     TickerRepository,
 )
@@ -125,12 +126,14 @@ class SchedulerControlService:
         article_cutoff = now - timedelta(days=self.settings.article_retention_days)
         snapshot_cutoff = now - timedelta(days=self.settings.snapshot_retention_days)
         job_cutoff = now - timedelta(days=self.settings.job_run_retention_days)
+        runtime_cutoff = now - timedelta(days=self.settings.runtime_retention_days)
 
         async with self.session_factory() as session:
             summary_deleted = await SummaryRepository(session).delete_created_before(article_cutoff)
             article_deleted = await ArticleRepository(session).delete_created_before(article_cutoff)
             snapshot_deleted = await MarketRepository(session).delete_captured_before(snapshot_cutoff)
             job_deleted = await JobRepository(session).delete_started_before(job_cutoff)
+            runtime_deleted = await RuntimeRunRepository(session).delete_started_before(runtime_cutoff)
             await session.commit()
 
         return {
@@ -138,6 +141,7 @@ class SchedulerControlService:
             "articles": article_deleted,
             "snapshots": snapshot_deleted,
             "job_runs": job_deleted,
+            "runtime_runs": runtime_deleted,
         }
 
 

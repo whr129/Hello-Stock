@@ -5,6 +5,10 @@ from news_agent.settings import Settings
 
 
 class DummySchedulerNodes:
+    def traced(self, step_name, func):
+        del step_name
+        return func
+
     async def load_due_sources(self, state):
         return {**state, "due_sources": [{"name": "Example"}], "due_tickers": ["AAPL"]}
 

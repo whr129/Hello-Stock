@@ -21,13 +21,18 @@ Intent = Literal[
     "recaptime",
     "recapoff",
     "recapstatus",
+    "runtime",
+    "job",
+    "trace",
+    "step",
+    "alerts",
     "skills",
     "help",
     "general_chat",
     "unknown",
 ]
 
-AgentName = Literal["news", "market"]
+AgentName = Literal["news", "market", "runtime"]
 Capability = Literal[
     "news_brief",
     "source_admin",
@@ -36,6 +41,8 @@ Capability = Literal[
     "recap_admin",
     "scheduler_admin",
     "memory_admin",
+    "runtime_inspection",
+    "runtime_alerts",
     "skills",
     "help",
     "market_snapshot",
@@ -54,6 +61,7 @@ class RouteState(TypedDict, total=False):
 class UserContext(TypedDict, total=False):
     user_id: int
     local_region: str
+    timezone: str
     topics: list[str]
     watched_tickers: list[str]
     short_term_memory: dict[str, Any]
@@ -80,7 +88,10 @@ class SupervisorState(TypedDict, total=False):
     user_context: UserContext
     news_result: AgentResult
     market_result: AgentResult
+    runtime_result: AgentResult
     search_result: AgentResult
+    runtime_run_id: int
+    active_step_id: int
     final_response: str
     response: str
     errors: list[str]

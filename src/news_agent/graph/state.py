@@ -9,6 +9,8 @@ ToolName = str
 class SchedulerState(TypedDict, total=False):
     job_id: int
     job_type: str
+    runtime_run_id: int
+    active_step_id: int
     due_sources: list[dict[str, Any]]
     due_tickers: list[str]
     fetched_articles: list[dict[str, Any]]

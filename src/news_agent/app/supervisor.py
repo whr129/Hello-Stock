@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Awaitable, Callable
 
 from langgraph.graph import END, StateGraph
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -9,10 +10,12 @@ from news_agent.agent.router import help_response, route_request
 from news_agent.app.state import SupervisorState
 from news_agent.domains.market.subagent import MarketSubagent
 from news_agent.domains.news.subagent import NewsSubagent
+from news_agent.domains.runtime.subagent import RuntimeSubagent
 from news_agent.markets.yahoo import YahooMarketDataProvider
 from news_agent.memory.embeddings import EmbeddingService
 from news_agent.memory.long_term import memory_from_user_text, should_store_memory
 from news_agent.memory.short_term import append_message, expiry
+from news_agent.observability.runtime import RuntimeAlertService, RuntimeTraceService, summarize_run_state
 from news_agent.search.service import GeneralSearchService
 from news_agent.settings import Settings
 from news_agent.storage.repositories import (
@@ -35,6 +38,8 @@ def _next_step(state: SupervisorState) -> str:
         return "merge_agent_outputs"
     if pending[0] == "news":
         return "run_news_agent"
+    if pending[0] == "runtime":
+        return "run_runtime_agent"
     return "run_market_agent"
 
 
@@ -58,8 +63,11 @@ class SupervisorNodes:
         self.intent_classifier = IntentClassifier(settings)
         self.news_agent = NewsSubagent(session_factory, settings)
         self.market_agent = MarketSubagent(session_factory, settings, YahooMarketDataProvider())
+        self.runtime_agent = RuntimeSubagent(session_factory, settings)
         self.search_service = GeneralSearchService(settings)
         self.embedding_service = EmbeddingService(settings)
+        self.trace_service = RuntimeTraceService(session_factory, settings)
+        self.alert_service = RuntimeAlertService(session_factory, settings)
 
     async def load_user_context(self, state: SupervisorState) -> SupervisorState:
         async with self.session_factory() as session:
@@ -147,6 +155,17 @@ class SupervisorNodes:
             "completed_agents": completed,
         }
 
+    async def run_runtime_agent(self, state: SupervisorState) -> SupervisorState:
+        result = await self.runtime_agent.run(state)
+        pending = [agent for agent in state.get("pending_agents", []) if agent != "runtime"]
+        completed = list(state.get("completed_agents", [])) + ["runtime"]
+        return {
+            **state,
+            "runtime_result": result,
+            "pending_agents": pending,
+            "completed_agents": completed,
+        }
+
     async def run_general_search(self, state: SupervisorState) -> SupervisorState:
         result = await self.search_service.search(
             _build_search_query(state),
@@ -174,6 +193,7 @@ class SupervisorNodes:
             parts: list[str] = []
             news_response = state.get("news_result", {}).get("response")
             market_response = state.get("market_result", {}).get("response")
+            runtime_response = state.get("runtime_result", {}).get("response")
             search_response = state.get("search_result", {}).get("response")
             news_meta = state.get("news_result", {}).get("metadata", {})
             market_meta = state.get("market_result", {}).get("metadata", {})
@@ -182,6 +202,8 @@ class SupervisorNodes:
                 parts.append(news_response)
             if market_response:
                 parts.append(market_response)
+            if runtime_response:
+                parts.append(runtime_response)
             if search_response:
                 if general_only:
                     parts = [search_response]
@@ -248,20 +270,112 @@ class SupervisorNodes:
         user_context["short_term_memory"] = short_term_state
         return {**state, "user_context": user_context}
 
+    def traced(
+        self,
+        step_name: str,
+        func: Callable[[SupervisorState], Awaitable[SupervisorState]],
+        *,
+        step_type: str = "node",
+        finalize_run: bool = False,
+    ) -> Callable[[SupervisorState], Awaitable[SupervisorState]]:
+        async def wrapped(state: SupervisorState) -> SupervisorState:
+            run_id = await self.trace_service.ensure_run(
+                workflow="chat",
+                trigger=_workflow_trigger(state),
+                telegram_user_id=state.get("telegram_user_id"),
+                chat_id=state.get("chat_id"),
+                metadata=_state_metadata(state),
+                run_id=state.get("runtime_run_id"),
+            )
+            parent_step_id = state.get("active_step_id")
+            step_id = await self.trace_service.start_step(
+                run_id=run_id,
+                workflow="chat",
+                step_name=step_name,
+                step_type=step_type,
+                parent_step_id=parent_step_id,
+                metadata=_step_metadata(state),
+            )
+            state = {**state, "runtime_run_id": run_id, "active_step_id": step_id}
+            try:
+                result = await func(state)
+            except Exception as exc:
+                message = str(exc)
+                await self.trace_service.finish_step(step_id, status="failed", error_message=message)
+                error_id = await self.trace_service.record_error(
+                    run_id=run_id,
+                    workflow="chat",
+                    step_name=step_name,
+                    error_message=message,
+                    step_id=step_id,
+                    metadata=_step_metadata(state),
+                )
+                await self.trace_service.finish_run(run_id, status="failed", summary=message[:500])
+                await self.alert_service.send_alert(
+                    run_id=run_id,
+                    error_id=error_id,
+                    message_text=(
+                        f"Runtime alert\n"
+                        f"- Workflow: chat\n"
+                        f"- Run: {run_id}\n"
+                        f"- Step: {step_name}\n"
+                        f"- Error: {message}"
+                    ),
+                )
+                raise
+
+            result = {**result, "runtime_run_id": run_id, "active_step_id": parent_step_id}
+            await self.trace_service.finish_step(
+                step_id,
+                status="completed",
+                metadata=_step_metadata(result),
+            )
+            if finalize_run:
+                status = "completed_with_errors" if result.get("errors") else "completed"
+                await self.trace_service.finish_run(
+                    run_id,
+                    status=status,
+                    summary=summarize_run_state("chat", result),
+                )
+                if result.get("errors"):
+                    for error in result["errors"]:
+                        error_id = await self.trace_service.record_error(
+                            run_id=run_id,
+                            workflow="chat",
+                            step_name=step_name,
+                            error_message=str(error),
+                            step_id=step_id,
+                        )
+                        await self.alert_service.send_alert(
+                            run_id=run_id,
+                            error_id=error_id,
+                            message_text=(
+                                f"Runtime alert\n"
+                                f"- Workflow: chat\n"
+                                f"- Run: {run_id}\n"
+                                f"- Step: {step_name}\n"
+                                f"- Error: {error}"
+                            ),
+                        )
+            return result
+
+        return wrapped
+
 
 def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settings):
     nodes = SupervisorNodes(session_factory, settings)
     graph = StateGraph(SupervisorState)
 
-    graph.add_node("load_user_context", nodes.load_user_context)
-    graph.add_node("classify_request", nodes.classify_request)
-    graph.add_node("route_request", nodes.route_request)
-    graph.add_node("run_news_agent", nodes.run_news_agent)
-    graph.add_node("run_market_agent", nodes.run_market_agent)
-    graph.add_node("run_general_search", nodes.run_general_search)
-    graph.add_node("merge_agent_outputs", nodes.merge_agent_outputs)
-    graph.add_node("guardrail_check", nodes.guardrail_check)
-    graph.add_node("persist_session", nodes.persist_session)
+    graph.add_node("load_user_context", nodes.traced("load_user_context", nodes.load_user_context))
+    graph.add_node("classify_request", nodes.traced("classify_request", nodes.classify_request))
+    graph.add_node("route_request", nodes.traced("route_request", nodes.route_request))
+    graph.add_node("run_news_agent", nodes.traced("run_news_agent", nodes.run_news_agent, step_type="subagent"))
+    graph.add_node("run_market_agent", nodes.traced("run_market_agent", nodes.run_market_agent, step_type="subagent"))
+    graph.add_node("run_runtime_agent", nodes.traced("run_runtime_agent", nodes.run_runtime_agent, step_type="subagent"))
+    graph.add_node("run_general_search", nodes.traced("run_general_search", nodes.run_general_search, step_type="tool"))
+    graph.add_node("merge_agent_outputs", nodes.traced("merge_agent_outputs", nodes.merge_agent_outputs))
+    graph.add_node("guardrail_check", nodes.traced("guardrail_check", nodes.guardrail_check))
+    graph.add_node("persist_session", nodes.traced("persist_session", nodes.persist_session, finalize_run=True))
 
     graph.set_entry_point("load_user_context")
     graph.add_edge("load_user_context", "classify_request")
@@ -272,6 +386,7 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         {
             "run_news_agent": "run_news_agent",
             "run_market_agent": "run_market_agent",
+            "run_runtime_agent": "run_runtime_agent",
             "run_general_search": "run_general_search",
             "merge_agent_outputs": "merge_agent_outputs",
         },
@@ -282,6 +397,7 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         {
             "run_news_agent": "run_news_agent",
             "run_market_agent": "run_market_agent",
+            "run_runtime_agent": "run_runtime_agent",
             "run_general_search": "run_general_search",
             "merge_agent_outputs": "merge_agent_outputs",
         },
@@ -292,6 +408,18 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         {
             "run_news_agent": "run_news_agent",
             "run_market_agent": "run_market_agent",
+            "run_runtime_agent": "run_runtime_agent",
+            "run_general_search": "run_general_search",
+            "merge_agent_outputs": "merge_agent_outputs",
+        },
+    )
+    graph.add_conditional_edges(
+        "run_runtime_agent",
+        _next_step,
+        {
+            "run_news_agent": "run_news_agent",
+            "run_market_agent": "run_market_agent",
+            "run_runtime_agent": "run_runtime_agent",
             "run_general_search": "run_general_search",
             "merge_agent_outputs": "merge_agent_outputs",
         },
@@ -313,3 +441,23 @@ def _build_search_query(state: SupervisorState) -> str:
         return f"Latest performance and context for {' '.join(requested_symbols)}"
 
     return "Latest relevant information for the user request"
+
+
+def _workflow_trigger(state: SupervisorState) -> str | None:
+    return state.get("command") or state.get("intent")
+
+
+def _state_metadata(state: SupervisorState) -> dict[str, object]:
+    return {
+        "message_text": state.get("message_text", "")[:500],
+        "intent": state.get("intent", ""),
+        "command": state.get("command", ""),
+    }
+
+
+def _step_metadata(state: SupervisorState) -> dict[str, object]:
+    return {
+        "pending_agents": list(state.get("pending_agents", [])),
+        "completed_agents": list(state.get("completed_agents", [])),
+        "route_capabilities": list(state.get("route", {}).get("capabilities", [])),
+    }

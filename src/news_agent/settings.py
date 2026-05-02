@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     general_search_timeout_seconds: int = Field(
         default=30, alias="GENERAL_SEARCH_TIMEOUT_SECONDS"
     )
+    runtime_alert_telegram_chat_id: int = Field(default=0, alias="RUNTIME_ALERT_TELEGRAM_CHAT_ID")
+    runtime_retention_days: int = Field(default=30, alias="RUNTIME_RETENTION_DAYS")
     embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
     news_fetch_interval_seconds: int = Field(default=900, alias="NEWS_FETCH_INTERVAL_SECONDS")
     market_refresh_interval_seconds: int = Field(

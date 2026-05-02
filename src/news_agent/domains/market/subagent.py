@@ -7,6 +7,7 @@ from news_agent.agent.chains import build_stocks_response
 from news_agent.agent.router import extract_stock_symbols
 from news_agent.app.state import AgentResult, SupervisorState
 from news_agent.markets.provider import MarketDataProvider
+from news_agent.observability.runtime import RuntimeTraceService
 from news_agent.settings import Settings
 from news_agent.storage.repositories import TickerRepository
 from news_agent.storage.retrieval import RetrievalService
@@ -22,6 +23,7 @@ class MarketSubagent:
         self.session_factory = session_factory
         self.settings = settings
         self.market_provider = market_provider
+        self.trace_service = RuntimeTraceService(session_factory, settings)
 
     async def run(self, state: SupervisorState) -> AgentResult:
         capabilities = set(state.get("route", {}).get("capabilities", []))
@@ -82,11 +84,27 @@ class MarketSubagent:
         stored_by_symbol = {item.get("symbol"): item for item in stored_context}
         market_context: list[dict[str, Any]] = []
         for ticker in tickers:
+            provider_step_id: int | None = None
             try:
+                if state.get("runtime_run_id"):
+                    provider_step_id = await self.trace_service.start_step(
+                        run_id=state["runtime_run_id"],
+                        workflow="chat",
+                        step_name=f"market:{ticker}",
+                        step_type="provider",
+                        parent_step_id=state.get("active_step_id"),
+                        metadata={"ticker": ticker},
+                    )
                 snapshot = await asyncio.wait_for(
                     asyncio.to_thread(self.market_provider.get_snapshot, ticker),
                     timeout=self.settings.market_fetch_timeout_seconds,
                 )
+                if provider_step_id is not None:
+                    await self.trace_service.finish_step(
+                        provider_step_id,
+                        status="completed",
+                        metadata={"symbol": snapshot.symbol},
+                    )
                 market_context.append(
                     {
                         "symbol": snapshot.symbol,
@@ -96,7 +114,21 @@ class MarketSubagent:
                         "source": "live",
                     }
                 )
-            except Exception:
+            except Exception as exc:
+                if provider_step_id is not None:
+                    await self.trace_service.finish_step(
+                        provider_step_id,
+                        status="failed",
+                        error_message=str(exc),
+                    )
+                    await self.trace_service.record_error(
+                        run_id=state["runtime_run_id"],
+                        workflow="chat",
+                        step_name=f"market:{ticker}",
+                        error_message=str(exc),
+                        step_id=provider_step_id,
+                        metadata={"ticker": ticker},
+                    )
                 fallback = stored_by_symbol.get(ticker)
                 if fallback:
                     market_context.append(fallback)

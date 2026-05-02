@@ -24,6 +24,11 @@ COMMAND_INTENTS: dict[str, Intent] = {
     "/recaptime": "recaptime",
     "/recapoff": "recapoff",
     "/recapstatus": "recapstatus",
+    "/runtime": "runtime",
+    "/job": "job",
+    "/trace": "trace",
+    "/step": "step",
+    "/alerts": "alerts",
     "/skills": "skills",
     "/help": "help",
     "/start": "help",
@@ -78,6 +83,13 @@ def skills_response() -> str:
         "- /recapoff\n"
         "- /recapstatus\n"
         "\n"
+        "Runtime debugging\n"
+        "- /runtime\n"
+        "- /job <run-id>\n"
+        "- /trace <run-id>\n"
+        "- /step <run-id> <step-name>\n"
+        "- /alerts\n"
+        "\n"
         "Memory and assistant info\n"
         "- /memory\n"
         "- /forget <memory-id>\n"
@@ -109,7 +121,7 @@ def route_request(
     command: str = "",
     args: list[str] | None = None,
 ) -> RouteDecision:
-    del message_text, command
+    del command
     args = args or []
     has_symbol_args = any(_looks_like_ticker(item) for item in args)
 
@@ -141,11 +153,17 @@ def route_request(
         return RouteDecision(agents=("news",), capabilities=("memory_admin",))
     if intent in {"timezone", "recaptime", "recapoff", "recapstatus"}:
         return RouteDecision(agents=("news",), capabilities=("recap_admin",))
+    if intent in {"runtime", "job", "trace", "step"}:
+        return RouteDecision(agents=("runtime",), capabilities=("runtime_inspection",))
+    if intent == "alerts":
+        return RouteDecision(agents=("runtime",), capabilities=("runtime_alerts",))
     if intent == "skills":
         return RouteDecision(agents=("news",), capabilities=("skills",))
     if intent == "help":
         return RouteDecision(agents=("news",), capabilities=("help",))
     if intent == "general_chat":
+        if _looks_like_runtime_query(message_text):
+            return RouteDecision(agents=("runtime",), capabilities=("runtime_inspection",))
         return RouteDecision(agents=(), capabilities=("general_search",))
     return RouteDecision(agents=(), capabilities=(), fallback_response=help_response())
 
@@ -179,4 +197,23 @@ def _looks_like_ticker(value: str) -> bool:
         normalized.isalpha()
         and 1 <= len(normalized) <= 5
         and normalized not in NON_TICKER_WORDS
+    )
+
+
+def _looks_like_runtime_query(message_text: str) -> bool:
+    lowered = message_text.lower()
+    return any(
+        phrase in lowered
+        for phrase in (
+            "last refresh",
+            "during refresh",
+            "calling history",
+            "call history",
+            "debug",
+            "which step",
+            "runtime",
+            "trace",
+            "alert",
+            "failed source",
+        )
     )

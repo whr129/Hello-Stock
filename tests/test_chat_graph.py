@@ -8,6 +8,10 @@ class DummySupervisorNodes:
     def __init__(self, session_factory, settings) -> None:
         self.calls: list[str] = []
 
+    def traced(self, step_name, func, **kwargs):
+        del step_name, kwargs
+        return func
+
     async def load_user_context(self, state):
         self.calls.append("load_user_context")
         return state
@@ -55,6 +59,17 @@ class DummySupervisorNodes:
             "search_result": {"response": "search response"},
         }
 
+    async def run_runtime_agent(self, state):
+        self.calls.append("run_runtime_agent")
+        pending = [agent for agent in state.get("pending_agents", []) if agent != "runtime"]
+        completed = list(state.get("completed_agents", [])) + ["runtime"]
+        return {
+            **state,
+            "runtime_result": {"response": "runtime response"},
+            "pending_agents": pending,
+            "completed_agents": completed,
+        }
+
     async def merge_agent_outputs(self, state):
         self.calls.append("merge_agent_outputs")
         parts = []
@@ -62,6 +77,8 @@ class DummySupervisorNodes:
             parts.append(state["news_result"]["response"])
         if state.get("market_result"):
             parts.append(state["market_result"]["response"])
+        if state.get("runtime_result"):
+            parts.append(state["runtime_result"]["response"])
         if state.get("search_result"):
             parts.append(state["search_result"]["response"])
         return {**state, "final_response": "\n\n".join(parts), "response": "\n\n".join(parts)}
@@ -122,3 +139,25 @@ async def test_chat_graph_runs_general_search_when_no_agents(monkeypatch) -> Non
 
     assert result["response"] == "search response"
     assert "run_general_search" in calls
+
+
+@pytest.mark.asyncio
+async def test_chat_graph_runs_runtime_agent_when_requested(monkeypatch) -> None:
+    class RuntimeNodes(DummySupervisorNodes):
+        async def route_request(self, state):
+            self.calls.append("route_request")
+            return {
+                **state,
+                "route": {"agents": ["runtime"], "capabilities": ["runtime_inspection"]},
+                "pending_agents": ["runtime"],
+                "completed_agents": [],
+            }
+
+    monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", RuntimeNodes)
+
+    graph = build_chat_graph(session_factory=None, settings=Settings(openai_api_key=""))
+    result = await graph.ainvoke({"message_text": "what happened in the last refresh"})
+    calls = result["metadata"]["calls"]
+
+    assert result["response"] == "runtime response"
+    assert "run_runtime_agent" in calls

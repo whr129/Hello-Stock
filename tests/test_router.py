@@ -60,6 +60,14 @@ def test_parse_skills_command() -> None:
     assert intent == "skills"
 
 
+def test_parse_runtime_command() -> None:
+    command, args, intent = parse_message("/runtime")
+
+    assert command == "/runtime"
+    assert args == []
+    assert intent == "runtime"
+
+
 def test_route_brief_to_news_subagent() -> None:
     route = route_intent("brief")
 
@@ -94,3 +102,17 @@ def test_route_skills_to_news_skills_capability() -> None:
 
     assert route.agents == ("news",)
     assert route.capabilities == ("skills",)
+
+
+def test_route_runtime_to_runtime_agent() -> None:
+    route = route_request("runtime")
+
+    assert route.agents == ("runtime",)
+    assert route.capabilities == ("runtime_inspection",)
+
+
+def test_route_runtime_like_general_chat_to_runtime_agent() -> None:
+    route = route_request("general_chat", message_text="what happened in the last refresh?")
+
+    assert route.agents == ("runtime",)
+    assert route.capabilities == ("runtime_inspection",)

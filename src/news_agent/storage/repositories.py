@@ -15,6 +15,10 @@ from news_agent.storage.models import (
     MemoryEmbedding,
     MemoryType,
     Preference,
+    RuntimeAlert,
+    RuntimeError,
+    RuntimeRun,
+    RuntimeStep,
     ShortTermSession,
     Source,
     Summary,
@@ -521,6 +525,222 @@ class JobRepository:
         await self.session.flush()
         rows = result.scalars().all()
         return len(rows)
+
+
+class RuntimeRunRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def start(
+        self,
+        *,
+        workflow: str,
+        trigger: str | None = None,
+        telegram_user_id: int | None = None,
+        chat_id: int | None = None,
+        metadata: dict | None = None,
+    ) -> RuntimeRun:
+        item = RuntimeRun(
+            workflow=workflow,
+            trigger=trigger,
+            telegram_user_id=telegram_user_id,
+            chat_id=chat_id,
+            status="running",
+            run_metadata=dict(metadata or {}),
+        )
+        self.session.add(item)
+        await self.session.flush()
+        return item
+
+    async def finish(self, run_id: int, *, status: str, summary: str | None = None) -> RuntimeRun | None:
+        result = await self.session.execute(select(RuntimeRun).where(RuntimeRun.id == run_id))
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        item.status = status
+        item.summary = summary
+        item.completed_at = datetime.now(UTC)
+        await self.session.flush()
+        return item
+
+    async def get(self, run_id: int) -> RuntimeRun | None:
+        result = await self.session.execute(select(RuntimeRun).where(RuntimeRun.id == run_id))
+        return result.scalar_one_or_none()
+
+    async def list_recent(
+        self,
+        *,
+        limit: int = 5,
+        workflow: str | None = None,
+        exclude_run_id: int | None = None,
+    ) -> list[RuntimeRun]:
+        stmt = select(RuntimeRun)
+        if workflow:
+            stmt = stmt.where(RuntimeRun.workflow == workflow)
+        if exclude_run_id:
+            stmt = stmt.where(RuntimeRun.id != exclude_run_id)
+        stmt = stmt.order_by(RuntimeRun.started_at.desc()).limit(limit)
+        result = await self.session.execute(stmt)
+        return list(result.scalars())
+
+    async def delete_started_before(self, cutoff: datetime) -> int:
+        result = await self.session.execute(
+            delete(RuntimeRun).where(RuntimeRun.started_at < cutoff).returning(RuntimeRun.id)
+        )
+        await self.session.flush()
+        return len(result.scalars().all())
+
+
+class RuntimeStepRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def start(
+        self,
+        *,
+        run_id: int,
+        workflow: str,
+        step_name: str,
+        step_type: str,
+        parent_step_id: int | None = None,
+        metadata: dict | None = None,
+    ) -> RuntimeStep:
+        item = RuntimeStep(
+            run_id=run_id,
+            workflow=workflow,
+            step_name=step_name,
+            step_type=step_type,
+            parent_step_id=parent_step_id,
+            status="running",
+            step_metadata=dict(metadata or {}),
+        )
+        self.session.add(item)
+        await self.session.flush()
+        return item
+
+    async def finish(
+        self,
+        step_id: int,
+        *,
+        status: str,
+        error_message: str | None = None,
+        metadata: dict | None = None,
+    ) -> RuntimeStep | None:
+        result = await self.session.execute(select(RuntimeStep).where(RuntimeStep.id == step_id))
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        item.status = status
+        item.error_message = error_message
+        item.completed_at = datetime.now(UTC)
+        elapsed = (item.completed_at - item.started_at).total_seconds()
+        item.duration_ms = max(int(elapsed * 1000), 0)
+        if metadata:
+            item.step_metadata = {**dict(item.step_metadata or {}), **metadata}
+        await self.session.flush()
+        return item
+
+    async def list_for_run(self, run_id: int) -> list[RuntimeStep]:
+        result = await self.session.execute(
+            select(RuntimeStep).where(RuntimeStep.run_id == run_id).order_by(RuntimeStep.id)
+        )
+        return list(result.scalars())
+
+    async def get_for_run(self, run_id: int, step_name: str) -> RuntimeStep | None:
+        result = await self.session.execute(
+            select(RuntimeStep)
+            .where(RuntimeStep.run_id == run_id)
+            .where(RuntimeStep.step_name == step_name)
+            .order_by(RuntimeStep.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+
+class RuntimeErrorRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(
+        self,
+        *,
+        run_id: int,
+        workflow: str,
+        step_name: str,
+        error_message: str,
+        step_id: int | None = None,
+        metadata: dict | None = None,
+    ) -> RuntimeError:
+        item = RuntimeError(
+            run_id=run_id,
+            step_id=step_id,
+            workflow=workflow,
+            step_name=step_name,
+            error_message=error_message,
+            error_metadata=dict(metadata or {}),
+        )
+        self.session.add(item)
+        await self.session.flush()
+        return item
+
+    async def list_recent(self, *, limit: int = 10) -> list[RuntimeError]:
+        result = await self.session.execute(
+            select(RuntimeError).order_by(RuntimeError.created_at.desc()).limit(limit)
+        )
+        return list(result.scalars())
+
+    async def list_for_run(self, run_id: int) -> list[RuntimeError]:
+        result = await self.session.execute(
+            select(RuntimeError)
+            .where(RuntimeError.run_id == run_id)
+            .order_by(RuntimeError.id)
+        )
+        return list(result.scalars())
+
+    async def search_recent(self, query: str, *, limit: int = 10) -> list[RuntimeError]:
+        pattern = f"%{query.lower()}%"
+        result = await self.session.execute(
+            select(RuntimeError)
+            .where(RuntimeError.error_message.ilike(pattern))
+            .order_by(RuntimeError.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars())
+
+
+class RuntimeAlertRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(
+        self,
+        *,
+        run_id: int,
+        channel: str,
+        status: str,
+        message_text: str,
+        target: str | None = None,
+        error_id: int | None = None,
+        delivered_at: datetime | None = None,
+    ) -> RuntimeAlert:
+        item = RuntimeAlert(
+            run_id=run_id,
+            error_id=error_id,
+            channel=channel,
+            status=status,
+            message_text=message_text,
+            target=target,
+            delivered_at=delivered_at,
+        )
+        self.session.add(item)
+        await self.session.flush()
+        return item
+
+    async def list_recent(self, *, limit: int = 10) -> list[RuntimeAlert]:
+        result = await self.session.execute(
+            select(RuntimeAlert).order_by(RuntimeAlert.created_at.desc()).limit(limit)
+        )
+        return list(result.scalars())
 
 
 class MemoryRepository:

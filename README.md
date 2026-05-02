@@ -98,6 +98,7 @@ PYTHONPATH=src .venv/bin/ruff check .
 - `/topics <topic...>`, `/local <region>`
 - `/sources`, `/addsource <provider> <target>`, `/sourceconfig <id> <key> <value>`, `/sourcefields <id> <field> <value>`, `/sourcetest <id>`, `/removesource <id>`
 - `/refresh`
+- `/runtime`, `/job <run-id>`, `/trace <run-id>`, `/step <run-id> <step-name>`, `/alerts`
 - `/timezone <Area/City>`, `/recaptime <HH:MM>`, `/recapoff`, `/recapstatus`
 - `/memory`, `/forget <memory-id>`, `/resetmemory`
 - `/skills`, `/help`
@@ -106,6 +107,7 @@ You can also ask natural-language questions directly, for example:
 - `what's google performance today`
 - `brief me on nvidia and today's ai news`
 - `who won the world series last year?`
+- `what happened in the last refresh?`
 
 ## Source Providers
 
@@ -126,3 +128,7 @@ Example:
 ## Safety
 
 Stock output is informational only. The market path can summarize price movement and indicators, but it should not provide buy/sell recommendations.
+
+## Runtime Alerts
+
+Set `RUNTIME_ALERT_TELEGRAM_CHAT_ID` to a Telegram chat id if you want operator-facing runtime alerts for failed or completed-with-errors runs.

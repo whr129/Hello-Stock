@@ -7,21 +7,23 @@ from news_agent.agent.router import extract_stock_symbols, parse_message
 from news_agent.graph.state import Intent
 from news_agent.settings import Settings
 
-ROUTABLE_INTENTS: set[Intent] = {"brief", "stocks", "general_chat", "help"}
+ROUTABLE_INTENTS: set[Intent] = {"brief", "stocks", "runtime", "general_chat", "help"}
 ROUTER_SYSTEM_PROMPT = """
-You are the routing layer for a Telegram assistant with two product surfaces:
+You are the routing layer for a Telegram assistant with three product surfaces:
 1. News coverage
 2. Market quotes and technical analysis
+3. Runtime debugging and execution-history lookup
 
 Return only valid JSON with this exact schema:
 {
-  "intent": "brief" | "stocks" | "general_chat" | "help",
+  "intent": "brief" | "stocks" | "runtime" | "general_chat" | "help",
   "args": ["STRING", "..."]
 }
 
 Routing policy:
 - Use "stocks" for requests about stock price, quote, performance, movement, ticker lookup, chart-style commentary, or technical analysis.
 - Use "brief" for news briefs, headlines, summaries, what happened today, market news, company news, or mixed requests that ask for both company/market performance and related news.
+- Use "runtime" for requests about runtime history, refresh steps, execution traces, recent failures, alerts, job status, or debugging what happened during a run.
 - Use "help" when the user is explicitly asking what the assistant can do or how to use it.
 - Use "general_chat" for casual conversation, broad factual questions, and general current-events questions outside the news-brief and stock-analysis flows. These requests will be answered with general web search.
 
@@ -36,6 +38,7 @@ Examples:
 - "what's google performance today" -> {"intent":"stocks","args":["GOOGL"]}
 - "brief me on nvidia and today's ai news" -> {"intent":"brief","args":["NVDA"]}
 - "what happened in the stock market today" -> {"intent":"brief","args":[]}
+- "what happened in the last refresh?" -> {"intent":"runtime","args":[]}
 - "what can you do?" -> {"intent":"help","args":[]}
 - "who won the world series last year?" -> {"intent":"general_chat","args":[]}
 - "hello" -> {"intent":"general_chat","args":[]}
@@ -96,6 +99,11 @@ class IntentClassifier:
         lowered = text.lower()
         if any(term in lowered for term in ("help", "what can you do", "commands", "/help")):
             return "", [], "help"
+        if any(
+            term in lowered
+            for term in ("last refresh", "during refresh", "runtime", "trace", "alert", "debug")
+        ):
+            return "", [], "runtime"
         if symbols:
             return "", symbols, "stocks"
         return "", [], "general_chat"

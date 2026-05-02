@@ -20,6 +20,7 @@ from news_agent.markets.yahoo import YahooMarketDataProvider
 from news_agent.memory.embeddings import EmbeddingService
 from news_agent.memory.long_term import memory_from_user_text, should_store_memory
 from news_agent.memory.short_term import append_message, expiry
+from news_agent.observability.runtime import RuntimeAlertService, RuntimeTraceService, summarize_run_state
 from news_agent.settings import Settings
 from news_agent.storage.models import JobRun, Source
 from news_agent.storage.repositories import (
@@ -444,6 +445,79 @@ class SchedulerNodes:
         self.summarizer = Summarizer(settings)
         self.embedding_service = EmbeddingService(settings)
         self.ingest_registry = IngestProviderRegistry()
+        self.trace_service = RuntimeTraceService(session_factory, settings)
+        self.alert_service = RuntimeAlertService(session_factory, settings)
+
+    def traced(self, step_name: str, func):
+        async def wrapped(state: SchedulerState) -> SchedulerState:
+            workflow = state.get("job_type", "scheduler")
+            run_id = await self.trace_service.ensure_run(
+                workflow=workflow,
+                trigger=workflow,
+                metadata={"job_id": state.get("job_id", 0)},
+                run_id=state.get("runtime_run_id"),
+            )
+            parent_step_id = state.get("active_step_id")
+            step_id = await self.trace_service.start_step(
+                run_id=run_id,
+                workflow=workflow,
+                step_name=step_name,
+                step_type="node",
+                parent_step_id=parent_step_id,
+                metadata={"job_id": state.get("job_id", 0)},
+            )
+            state = {**state, "runtime_run_id": run_id, "active_step_id": step_id}
+            try:
+                result = await func(state)
+            except Exception as exc:
+                message = str(exc)
+                await self.trace_service.finish_step(step_id, status="failed", error_message=message)
+                error_id = await self.trace_service.record_error(
+                    run_id=run_id,
+                    workflow=workflow,
+                    step_name=step_name,
+                    error_message=message,
+                    step_id=step_id,
+                    metadata={"job_id": state.get("job_id", 0)},
+                )
+                await self.trace_service.finish_run(run_id, status="failed", summary=message[:500])
+                await self.alert_service.send_alert(
+                    run_id=run_id,
+                    error_id=error_id,
+                    message_text=(
+                        f"Runtime alert\n"
+                        f"- Workflow: {workflow}\n"
+                        f"- Run: {run_id}\n"
+                        f"- Step: {step_name}\n"
+                        f"- Error: {message}"
+                    ),
+                )
+                raise
+
+            result = {**result, "runtime_run_id": run_id, "active_step_id": parent_step_id}
+            await self.trace_service.finish_step(step_id, status="completed")
+            if step_name == "retry_or_recover":
+                status = "completed_with_errors" if result.get("errors") else "completed"
+                await self.trace_service.finish_run(
+                    run_id,
+                    status=status,
+                    summary=summarize_run_state(workflow, result),
+                )
+                if result.get("errors"):
+                    await self.alert_service.send_alert(
+                        run_id=run_id,
+                        message_text=(
+                            f"Runtime alert\n"
+                            f"- Workflow: {workflow}\n"
+                            f"- Run: {run_id}\n"
+                            f"- Step: {step_name}\n"
+                            f"- Errors: {len(result['errors'])}\n"
+                            f"- First error: {result['errors'][0]}"
+                        ),
+                    )
+            return result
+
+        return wrapped
 
     async def _run_blocking_with_timeout(self, label: str, func, timeout_seconds: int):
         started_at = perf_counter()
@@ -521,7 +595,16 @@ class SchedulerNodes:
         )
 
         for source in state.get("due_sources", []):
+            provider_step_id: int | None = None
             try:
+                provider_step_id = await self.trace_service.start_step(
+                    run_id=state["runtime_run_id"],
+                    workflow=state.get("job_type", "scheduler"),
+                    step_name=f"source:{source['name']}",
+                    step_type="provider",
+                    parent_step_id=state.get("active_step_id"),
+                    metadata={"provider": source["provider"], "source_id": source["id"]},
+                )
                 logger.info(
                     "scheduler fetching feed source=%s url=%s timeout=%ss",
                     source["name"],
@@ -539,6 +622,11 @@ class SchedulerNodes:
                     timeout_seconds=self.settings.rss_fetch_timeout_seconds + 2,
                 )
                 provider_counts[source["provider"]] = provider_counts.get(source["provider"], 0) + len(articles)
+                await self.trace_service.finish_step(
+                    provider_step_id,
+                    status="completed",
+                    metadata={"article_count": len(articles)},
+                )
                 logger.info(
                     "scheduler fetched source source=%s articles=%s",
                     source["name"],
@@ -566,6 +654,20 @@ class SchedulerNodes:
                     )
                     await session.commit()
             except Exception as exc:
+                if provider_step_id is not None:
+                    await self.trace_service.finish_step(
+                        provider_step_id,
+                        status="failed",
+                        error_message=str(exc),
+                    )
+                    await self.trace_service.record_error(
+                        run_id=state["runtime_run_id"],
+                        workflow=state.get("job_type", "scheduler"),
+                        step_name=f"source:{source['name']}",
+                        error_message=str(exc),
+                        step_id=provider_step_id,
+                        metadata={"provider": source["provider"], "source_id": source["id"]},
+                    )
                 logger.warning(
                     "scheduler source fetch failed source=%s error=%s",
                     source["name"],
@@ -587,7 +689,16 @@ class SchedulerNodes:
             extra={"ticker_count": len(state.get("due_tickers", []))},
         )
         for ticker in state.get("due_tickers", []):
+            provider_step_id: int | None = None
             try:
+                provider_step_id = await self.trace_service.start_step(
+                    run_id=state["runtime_run_id"],
+                    workflow=state.get("job_type", "scheduler"),
+                    step_name=f"ticker:{ticker}",
+                    step_type="provider",
+                    parent_step_id=state.get("active_step_id"),
+                    metadata={"ticker": ticker},
+                )
                 logger.info(
                     "scheduler fetching ticker ticker=%s timeout=%ss",
                     ticker,
@@ -607,6 +718,11 @@ class SchedulerNodes:
                         "indicators": snapshot.indicators,
                     }
                 )
+                await self.trace_service.finish_step(
+                    provider_step_id,
+                    status="completed",
+                    metadata={"symbol": snapshot.symbol},
+                )
                 logger.info(
                     "scheduler fetched ticker ticker=%s price=%s percent_change=%s",
                     snapshot.symbol,
@@ -614,6 +730,20 @@ class SchedulerNodes:
                     snapshot.percent_change,
                 )
             except Exception as exc:
+                if provider_step_id is not None:
+                    await self.trace_service.finish_step(
+                        provider_step_id,
+                        status="failed",
+                        error_message=str(exc),
+                    )
+                    await self.trace_service.record_error(
+                        run_id=state["runtime_run_id"],
+                        workflow=state.get("job_type", "scheduler"),
+                        step_name=f"ticker:{ticker}",
+                        error_message=str(exc),
+                        step_id=provider_step_id,
+                        metadata={"ticker": ticker},
+                    )
                 logger.warning(
                     "scheduler ticker fetch failed ticker=%s error=%s",
                     ticker,

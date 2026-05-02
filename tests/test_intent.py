@@ -91,6 +91,17 @@ async def test_intent_classifier_uses_llm_router_for_mixed_request() -> None:
     assert intent == "brief"
 
 
+@pytest.mark.asyncio
+async def test_intent_classifier_uses_llm_router_for_runtime_request() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key="test"))
+    classifier.client = FakeClient('{"intent": "runtime", "args": []}')
+
+    _, args, intent = await classifier.classify("what happened in the last refresh?")
+
+    assert args == []
+    assert intent == "runtime"
+
+
 def test_router_prompt_mentions_supported_outputs() -> None:
-    assert '"intent": "brief" | "stocks" | "general_chat" | "help"' in ROUTER_SYSTEM_PROMPT
+    assert '"intent": "brief" | "stocks" | "runtime" | "general_chat" | "help"' in ROUTER_SYSTEM_PROMPT
     assert "Return only valid JSON" in ROUTER_SYSTEM_PROMPT

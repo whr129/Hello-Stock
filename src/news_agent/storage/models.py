@@ -230,6 +230,71 @@ class JobRun(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class RuntimeRun(Base):
+    __tablename__ = "runtime_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workflow: Mapped[str] = mapped_column(String(64), index=True)
+    trigger: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    run_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RuntimeStep(Base):
+    __tablename__ = "runtime_steps"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("runtime_runs.id", ondelete="CASCADE"), index=True)
+    parent_step_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runtime_steps.id", ondelete="CASCADE"), nullable=True
+    )
+    workflow: Mapped[str] = mapped_column(String(64), index=True)
+    step_name: Mapped[str] = mapped_column(String(128), index=True)
+    step_type: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    step_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class RuntimeError(Base):
+    __tablename__ = "runtime_errors"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("runtime_runs.id", ondelete="CASCADE"), index=True)
+    step_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runtime_steps.id", ondelete="SET NULL"), nullable=True
+    )
+    workflow: Mapped[str] = mapped_column(String(64), index=True)
+    step_name: Mapped[str] = mapped_column(String(128), index=True)
+    error_message: Mapped[str] = mapped_column(Text)
+    error_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RuntimeAlert(Base):
+    __tablename__ = "runtime_alerts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("runtime_runs.id", ondelete="CASCADE"), index=True)
+    error_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runtime_errors.id", ondelete="SET NULL"), nullable=True
+    )
+    channel: Mapped[str] = mapped_column(String(32), default="telegram")
+    target: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    message_text: Mapped[str] = mapped_column(Text)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class QualityEvent(Base):
     __tablename__ = "quality_events"
 

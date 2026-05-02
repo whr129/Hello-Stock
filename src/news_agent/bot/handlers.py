@@ -43,6 +43,11 @@ def register_handlers(application: Application) -> None:
         "recaptime",
         "recapoff",
         "recapstatus",
+        "runtime",
+        "job",
+        "trace",
+        "step",
+        "alerts",
         "skills",
     ]
     for command in commands:
