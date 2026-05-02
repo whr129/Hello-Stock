@@ -9,6 +9,24 @@ The application is refactored around a LangGraph supervisor that routes each inc
 
 The Telegram bot, scheduler, and persistence model remain in place. The active chat path no longer uses the previous generic tool registry or free-form ReAct fallback.
 
+## Memory Architecture
+Memory is split into two layers:
+
+- short-term memory: LangGraph-managed message state scoped to a Telegram chat thread
+- long-term memory: async consolidated user memory stored in a vector-backed memory pool
+
+Short-term memory should be maintained as rolling thread state and persisted between requests. It is used for immediate conversational continuity and `/memory` inspection.
+
+Long-term memory should no longer be stored synchronously on every qualifying message. Instead:
+
+1. persist a conversation transcript
+2. enqueue a memory consolidation job after every 20 new user messages
+3. run extraction and consolidation asynchronously in the scheduler loop
+4. compare candidates against existing vector memories
+5. decide `add`, `update`, or `skip`
+
+The long-term memory store should support semantic retrieval rather than only latest-first listing.
+
 ## Runtime Flow
 The interactive graph now runs the following sequence:
 
@@ -68,6 +86,7 @@ Routing is capability-driven:
 - `src/news_agent/scheduler/service.py`
   - manual refresh summaries
   - recap delivery
+  - memory consolidation job processing
   - runtime alert trigger points for scheduler failures
 
 ### Compatibility
@@ -82,9 +101,16 @@ The supervisor state owns:
 - request fields: user/chat/message, command, args, intent
 - parsed entities: requested symbols, requested topics
 - `user_context`: watchlist, topics, local region, timezone, short-term memory, long-term memory
+- `messages`: LangGraph-compatible short-term message state for the active chat thread
 - route metadata: ordered agents, requested capabilities, fallback response
 - subagent outputs: `news_result`, `market_result`, `runtime_result`
 - final output: `final_response`
+
+The memory subsystem additionally owns:
+
+- `ConversationEvent`: persisted user/assistant transcript rows
+- `MemoryConsolidationJob`: pending/running/completed async memory jobs
+- upgraded `LongTermMemory`: vector-backed durable memory items with lifecycle metadata
 
 The runtime subsystem additionally owns persistent operational state:
 
@@ -110,6 +136,8 @@ Each trace step should record:
 - Free-form `general_chat` handling is replaced by constrained help or explicit web-search routing.
 - Financial guardrails are applied only when market output is included.
 - Mixed requests can now combine a news brief with market analysis in one turn.
+- Short-term memory is maintained with LangGraph-style message state instead of a custom plain dict list.
+- Long-term memory is extracted asynchronously in batches of 20 user messages and consolidated into a vector-backed memory pool.
 - Every chat request and scheduler refresh should emit runtime traces that preserve the sequence of node, subagent, and provider calls.
 - Failed or completed-with-errors runs should trigger a Telegram admin alert to a configured operator chat.
 - Runtime history is queryable so an operator can inspect a refresh step, a specific call chain, or recent failures for debugging.

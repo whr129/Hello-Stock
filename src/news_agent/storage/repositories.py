@@ -2,16 +2,18 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import UUID as PythonUUID
 
-from sqlalchemy import delete, distinct, select, update
+from sqlalchemy import delete, distinct, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from news_agent.settings import Settings
 from news_agent.storage.models import (
     Article,
     ArticleEmbedding,
+    ConversationEvent,
     JobRun,
     LongTermMemory,
     MarketSnapshot,
+    MemoryConsolidationJob,
     MemoryEmbedding,
     MemoryType,
     Preference,
@@ -72,6 +74,14 @@ class UserRepository:
         await self.session.flush()
         result = await self.session.execute(select(User).where(User.id == user_id))
         return result.scalar_one_or_none()
+
+    async def update_memory_cursor(self, user_id: int, event_id: int) -> None:
+        await self.session.execute(
+            update(User)
+            .where(User.id == user_id)
+            .values(memory_cursor_event_id=event_id)
+        )
+        await self.session.flush()
 
 
 class PreferenceRepository:
@@ -390,7 +400,9 @@ class MarketRepository:
 
     async def delete_captured_before(self, cutoff: datetime) -> int:
         result = await self.session.execute(
-            delete(MarketSnapshot).where(MarketSnapshot.captured_at < cutoff).returning(MarketSnapshot.id)
+            delete(MarketSnapshot)
+            .where(MarketSnapshot.captured_at < cutoff)
+            .returning(MarketSnapshot.id)
         )
         await self.session.flush()
         rows = result.scalars().all()
@@ -480,6 +492,18 @@ class EmbeddingRepository:
         await self.session.flush()
         return item
 
+    async def replace_memory_embedding(
+        self,
+        memory_id: int,
+        embedding: list[float],
+        embedding_model: str,
+    ) -> MemoryEmbedding:
+        await self.session.execute(
+            delete(MemoryEmbedding).where(MemoryEmbedding.memory_id == memory_id)
+        )
+        await self.session.flush()
+        return await self.save_memory_embedding(memory_id, embedding, embedding_model)
+
 
 class JobRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -552,7 +576,13 @@ class RuntimeRunRepository:
         await self.session.flush()
         return item
 
-    async def finish(self, run_id: int, *, status: str, summary: str | None = None) -> RuntimeRun | None:
+    async def finish(
+        self,
+        run_id: int,
+        *,
+        status: str,
+        summary: str | None = None,
+    ) -> RuntimeRun | None:
         result = await self.session.execute(select(RuntimeRun).where(RuntimeRun.id == run_id))
         item = result.scalar_one_or_none()
         if item is None:
@@ -743,6 +773,184 @@ class RuntimeAlertRepository:
         return list(result.scalars())
 
 
+class ConversationEventRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(
+        self,
+        *,
+        user_id: int,
+        chat_id: int,
+        role: str,
+        content: str,
+        metadata: dict | None = None,
+    ) -> ConversationEvent:
+        item = ConversationEvent(
+            user_id=user_id,
+            chat_id=chat_id,
+            role=role,
+            content=content,
+            event_metadata=dict(metadata or {}),
+        )
+        self.session.add(item)
+        await self.session.flush()
+        return item
+
+    async def list_between_ids(
+        self,
+        *,
+        user_id: int,
+        start_event_id: int,
+        end_event_id: int,
+    ) -> list[ConversationEvent]:
+        result = await self.session.execute(
+            select(ConversationEvent)
+            .where(ConversationEvent.user_id == user_id)
+            .where(ConversationEvent.id >= start_event_id)
+            .where(ConversationEvent.id <= end_event_id)
+            .order_by(ConversationEvent.id)
+        )
+        return list(result.scalars())
+
+    async def list_oldest_unprocessed_user_events(
+        self,
+        *,
+        user_id: int,
+        after_event_id: int,
+        limit: int,
+    ) -> list[ConversationEvent]:
+        result = await self.session.execute(
+            select(ConversationEvent)
+            .where(ConversationEvent.user_id == user_id)
+            .where(ConversationEvent.role == "user")
+            .where(ConversationEvent.id > after_event_id)
+            .order_by(ConversationEvent.id)
+            .limit(limit)
+        )
+        return list(result.scalars())
+
+    async def count_unprocessed_user_events(self, *, user_id: int, after_event_id: int) -> int:
+        result = await self.session.execute(
+            select(func.count(ConversationEvent.id))
+            .where(ConversationEvent.user_id == user_id)
+            .where(ConversationEvent.role == "user")
+            .where(ConversationEvent.id > after_event_id)
+        )
+        return int(result.scalar_one() or 0)
+
+    async def latest_event_id_for_user(self, user_id: int) -> int:
+        result = await self.session.execute(
+            select(func.max(ConversationEvent.id)).where(ConversationEvent.user_id == user_id)
+        )
+        return int(result.scalar_one() or 0)
+
+
+class MemoryConsolidationJobRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def has_active_job(self, user_id: int) -> bool:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob.id)
+            .where(MemoryConsolidationJob.user_id == user_id)
+            .where(MemoryConsolidationJob.status.in_(("pending", "running")))
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def create(
+        self,
+        *,
+        user_id: int,
+        source_start_event_id: int,
+        source_end_event_id: int,
+        message_count: int,
+    ) -> MemoryConsolidationJob:
+        item = MemoryConsolidationJob(
+            user_id=user_id,
+            source_start_event_id=source_start_event_id,
+            source_end_event_id=source_end_event_id,
+            message_count=message_count,
+            status="pending",
+        )
+        self.session.add(item)
+        await self.session.flush()
+        return item
+
+    async def get(self, job_id: int) -> MemoryConsolidationJob | None:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob).where(MemoryConsolidationJob.id == job_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_pending(self, *, limit: int = 5) -> list[MemoryConsolidationJob]:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob)
+            .where(MemoryConsolidationJob.status == "pending")
+            .order_by(MemoryConsolidationJob.created_at)
+            .limit(limit)
+        )
+        return list(result.scalars())
+
+    async def mark_running(self, job_id: int) -> MemoryConsolidationJob | None:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob).where(MemoryConsolidationJob.id == job_id)
+        )
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        item.status = "running"
+        item.started_at = datetime.now(UTC)
+        item.error_message = None
+        await self.session.flush()
+        return item
+
+    async def mark_completed(self, job_id: int) -> MemoryConsolidationJob | None:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob).where(MemoryConsolidationJob.id == job_id)
+        )
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        item.status = "completed"
+        item.completed_at = datetime.now(UTC)
+        item.error_message = None
+        await self.session.flush()
+        return item
+
+    async def mark_failed(
+        self,
+        job_id: int,
+        *,
+        error_message: str,
+        max_retries: int,
+    ) -> MemoryConsolidationJob | None:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob).where(MemoryConsolidationJob.id == job_id)
+        )
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        item.retry_count += 1
+        item.error_message = error_message
+        item.completed_at = datetime.now(UTC)
+        item.status = "pending" if item.retry_count < max_retries else "failed"
+        if item.status == "pending":
+            item.started_at = None
+        await self.session.flush()
+        return item
+
+    async def delete_for_user(self, user_id: int) -> int:
+        result = await self.session.execute(
+            delete(MemoryConsolidationJob)
+            .where(MemoryConsolidationJob.user_id == user_id)
+            .returning(MemoryConsolidationJob.id)
+        )
+        await self.session.flush()
+        return len(result.scalars().all())
+
+
 class MemoryRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -751,8 +959,26 @@ class MemoryRepository:
         result = await self.session.execute(
             select(LongTermMemory)
             .where(LongTermMemory.user_id == user_id)
+            .where(LongTermMemory.status == "active")
             .order_by(LongTermMemory.updated_at.desc())
             .limit(20)
+        )
+        return list(result.scalars())
+
+    async def semantic_search_for_user(
+        self,
+        *,
+        user_id: int,
+        query_embedding: list[float],
+        limit: int = 5,
+    ) -> list[LongTermMemory]:
+        result = await self.session.execute(
+            select(LongTermMemory)
+            .join(MemoryEmbedding, MemoryEmbedding.memory_id == LongTermMemory.id)
+            .where(LongTermMemory.user_id == user_id)
+            .where(LongTermMemory.status == "active")
+            .order_by(MemoryEmbedding.embedding.cosine_distance(query_embedding))
+            .limit(limit)
         )
         return list(result.scalars())
 
@@ -763,15 +989,56 @@ class MemoryRepository:
         memory_type: MemoryType = MemoryType.EXPLICIT,
         source: str = "user",
         confidence: float = 1.0,
+        category: str = "general",
+        source_job_id: int | None = None,
     ) -> LongTermMemory:
         memory = LongTermMemory(
             user_id=user_id,
             memory_text=text,
             memory_type=memory_type.value,
+            category=category,
+            status="active",
             source=source,
             confidence=confidence,
+            source_job_id=source_job_id,
+            last_seen_at=datetime.now(UTC),
         )
         self.session.add(memory)
+        await self.session.flush()
+        return memory
+
+    async def get(self, memory_id: int) -> LongTermMemory | None:
+        result = await self.session.execute(
+            select(LongTermMemory).where(LongTermMemory.id == memory_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def update_memory(
+        self,
+        *,
+        memory_id: int,
+        text: str,
+        category: str,
+        confidence: float,
+        source_job_id: int | None = None,
+    ) -> LongTermMemory | None:
+        memory = await self.get(memory_id)
+        if memory is None:
+            return None
+        memory.memory_text = text
+        memory.category = category
+        memory.confidence = confidence
+        memory.source_job_id = source_job_id
+        memory.last_seen_at = datetime.now(UTC)
+        memory.status = "active"
+        await self.session.flush()
+        return memory
+
+    async def mark_seen(self, memory_id: int) -> LongTermMemory | None:
+        memory = await self.get(memory_id)
+        if memory is None:
+            return None
+        memory.last_seen_at = datetime.now(UTC)
         await self.session.flush()
         return memory
 
@@ -783,6 +1050,29 @@ class MemoryRepository:
             )
         )
         await self.session.flush()
+
+    async def nearest_for_user(
+        self,
+        *,
+        user_id: int,
+        query_embedding: list[float],
+        limit: int = 3,
+    ) -> list[tuple[LongTermMemory, float]]:
+        result = await self.session.execute(
+            select(
+                LongTermMemory,
+                MemoryEmbedding.embedding.cosine_distance(query_embedding).label("distance"),
+            )
+            .join(MemoryEmbedding, MemoryEmbedding.memory_id == LongTermMemory.id)
+            .where(LongTermMemory.user_id == user_id)
+            .where(LongTermMemory.status == "active")
+            .order_by("distance")
+            .limit(limit)
+        )
+        rows = []
+        for memory, distance in result.all():
+            rows.append((memory, float(distance)))
+        return rows
 
     async def forget(self, user_id: int, public_id: str) -> bool:
         try:

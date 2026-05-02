@@ -9,6 +9,8 @@ from news_agent.agent.ranking import rank_articles
 from news_agent.app.state import AgentResult, SupervisorState
 from news_agent.agent.router import skills_response
 from news_agent.ingestion.providers import IngestProviderRegistry
+from news_agent.memory.consolidation import MemoryConsolidationService
+from news_agent.memory.short_term import render_messages
 from news_agent.scheduler.service import (
     SchedulerControlService,
     parse_config_value,
@@ -31,6 +33,7 @@ class NewsSubagent:
         self.settings = settings
         self.ingest_registry = IngestProviderRegistry()
         self.scheduler_control = SchedulerControlService(settings)
+        self.memory_service = MemoryConsolidationService(session_factory, settings)
 
     async def run(self, state: SupervisorState) -> AgentResult:
         capabilities = set(state.get("route", {}).get("capabilities", []))
@@ -354,19 +357,17 @@ class NewsSubagent:
             if command == "/memory":
                 memories = await repository.list_for_user(user_id)
                 response_parts: list[str] = []
-                messages = state["user_context"].get("short_term_memory", {}).get("messages", [])[-8:]
+                messages = list(state.get("messages", []))
                 if messages:
                     response_parts.append(
-                        "Recent session memory:\n"
-                        + "\n".join(
-                            f"- {item.get('role')}: {item.get('content')}" for item in messages
-                        )
+                        "Recent session memory:\n" + "\n".join(render_messages(messages, limit=8))
                     )
                 if memories:
                     response_parts.append(
                         "Long-term memory:\n"
                         + "\n".join(
-                            f"- {memory.public_id}: {memory.memory_text}" for memory in memories
+                            f"- {memory.public_id}: [{memory.category}] {memory.memory_text}"
+                            for memory in memories
                         )
                     )
                 return {
@@ -388,8 +389,8 @@ class NewsSubagent:
                 }
 
             if command == "/resetmemory":
-                await repository.reset_learned(user_id)
                 await session.commit()
+                await self.memory_service.reset_user_state(user_id=user_id)
                 return {
                     "response": "Learned memory has been reset.",
                     "metadata": {"capability": "memory_admin"},
