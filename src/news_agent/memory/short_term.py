@@ -26,7 +26,7 @@ def append_message(
 
 
 def deserialize_state(payload: dict[str, Any] | None) -> dict[str, Any]:
-    raw_messages = list((payload or {}).get("messages", []))
+    raw_messages = [_normalize_message(item) for item in (payload or {}).get("messages", [])]
     if not raw_messages:
         return {"messages": []}
     return {
@@ -63,3 +63,26 @@ def _message_for_role(role: str, content: str) -> AnyMessage:
     if role == "assistant":
         return AIMessage(content=content, additional_kwargs=metadata)
     return HumanMessage(content=content, additional_kwargs=metadata)
+
+
+def _normalize_message(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {"type": "human", "data": {"content": str(item)}}
+    if "type" in item and "data" in item:
+        return item
+
+    role = item.get("role")
+    if role in {"user", "assistant"}:
+        message_type = "ai" if role == "assistant" else "human"
+        additional_kwargs = {}
+        if item.get("at"):
+            additional_kwargs["at"] = item["at"]
+        return {
+            "type": message_type,
+            "data": {
+                "content": item.get("content", ""),
+                "additional_kwargs": additional_kwargs,
+            },
+        }
+
+    return {"type": "human", "data": {"content": item.get("content", "")}}

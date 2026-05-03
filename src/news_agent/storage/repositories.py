@@ -1055,9 +1055,13 @@ class MemoryRepository:
         self,
         *,
         user_id: int,
+        memory_type: MemoryType | str,
         query_embedding: list[float],
         limit: int = 3,
     ) -> list[tuple[LongTermMemory, float]]:
+        memory_type_value = (
+            memory_type.value if isinstance(memory_type, MemoryType) else memory_type
+        )
         result = await self.session.execute(
             select(
                 LongTermMemory,
@@ -1065,6 +1069,7 @@ class MemoryRepository:
             )
             .join(MemoryEmbedding, MemoryEmbedding.memory_id == LongTermMemory.id)
             .where(LongTermMemory.user_id == user_id)
+            .where(LongTermMemory.memory_type == memory_type_value)
             .where(LongTermMemory.status == "active")
             .order_by("distance")
             .limit(limit)

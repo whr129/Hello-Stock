@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from news_agent.agent.guardrails import enforce_financial_guardrails
 from news_agent.agent.intent import IntentClassifier
+from news_agent.agent.reflection import ReflectionService
 from news_agent.agent.router import help_response, route_request
 from news_agent.app.state import SupervisorState
 from news_agent.domains.market.subagent import MarketSubagent
@@ -38,6 +39,11 @@ from news_agent.storage.repositories import (
 
 logger = logging.getLogger(__name__)
 
+REFLECTION_EXHAUSTED_NOTE = (
+    "Note: I could not confidently repair this answer after a reflection retry. "
+    "You may want to rephrase or use a direct command such as /brief, /stocks, or /runtime."
+)
+
 
 def _next_step(state: SupervisorState) -> str:
     pending = state.get("pending_agents", [])
@@ -65,6 +71,12 @@ def _should_run_search(state: SupervisorState) -> bool:
     return bool(news_meta.get("needs_search_fallback") or market_meta.get("needs_search_fallback"))
 
 
+def _after_reflection(state: SupervisorState) -> str:
+    if state.get("metadata", {}).get("reflection_retry"):
+        return "route_request"
+    return "persist_session"
+
+
 class SupervisorNodes:
     def __init__(self, session_factory: async_sessionmaker, settings: Settings) -> None:
         self.session_factory = session_factory
@@ -74,6 +86,7 @@ class SupervisorNodes:
         self.market_agent = MarketSubagent(session_factory, settings, YahooMarketDataProvider())
         self.runtime_agent = RuntimeSubagent(session_factory, settings)
         self.search_service = GeneralSearchService(settings)
+        self.reflection_service = ReflectionService(settings)
         self.embedding_service = EmbeddingService(settings)
         self.memory_service = MemoryConsolidationService(session_factory, settings)
         self.trace_service = RuntimeTraceService(session_factory, settings)
@@ -267,6 +280,90 @@ class SupervisorNodes:
             response = enforce_financial_guardrails(response)
         return {**state, "final_response": response, "response": response}
 
+    async def reflect_result(self, state: SupervisorState) -> SupervisorState:
+        metadata = dict(state.get("metadata", {}))
+        metadata.pop("reflection_retry", None)
+        reflection_notes = list(state.get("reflection_notes", []))
+        attempts = int(state.get("reflection_attempts", 0) or 0)
+
+        if not self.settings.answer_reflection_enabled:
+            return {
+                **state,
+                "metadata": {**metadata, "reflection_status": "disabled"},
+                "reflection_attempts": attempts,
+                "reflection_notes": reflection_notes,
+            }
+
+        decision = await self.reflection_service.reflect(state)
+        decision_payload = {
+            "verdict": decision.verdict,
+            "reason": decision.reason,
+            "corrected_intent": decision.corrected_intent,
+            "corrected_args": decision.corrected_args or [],
+            "status": decision.status,
+            "attempt": attempts,
+        }
+        metadata["reflection_decision"] = decision_payload
+        metadata["reflection_status"] = decision.status
+
+        if decision.verdict == "pass":
+            return {
+                **state,
+                "metadata": metadata,
+                "reflection_attempts": attempts,
+                "reflection_decision": decision_payload,
+                "reflection_notes": reflection_notes,
+            }
+
+        if (
+            decision.verdict == "retry"
+            and decision.corrected_intent
+            and attempts < self.settings.answer_reflection_max_retries
+        ):
+            corrected_args = decision.corrected_args or []
+            metadata["reflection_retry"] = True
+            metadata.setdefault("reflection_history", []).append(decision_payload)
+            requested_symbols = [
+                item.upper() for item in corrected_args if item.isalpha() and 1 <= len(item) <= 5
+            ]
+            return {
+                **state,
+                "command": "",
+                "intent": decision.corrected_intent,
+                "args": corrected_args,
+                "requested_symbols": requested_symbols,
+                "route": {},
+                "pending_agents": [],
+                "completed_agents": [],
+                "news_result": {},
+                "market_result": {},
+                "runtime_result": {},
+                "search_result": {},
+                "final_response": "",
+                "response": "",
+                "metadata": metadata,
+                "reflection_attempts": attempts + 1,
+                "reflection_decision": decision_payload,
+                "reflection_notes": reflection_notes + [decision.reason],
+                "reflection_exhausted": False,
+            }
+
+        response = state.get("final_response", "")
+        if REFLECTION_EXHAUSTED_NOTE not in response:
+            response = f"{response}\n\n{REFLECTION_EXHAUSTED_NOTE}".strip()
+        metadata["reflection_exhausted"] = True
+        metadata.setdefault("reflection_history", []).append(decision_payload)
+        return {
+            **state,
+            "final_response": response,
+            "response": response,
+            "metadata": metadata,
+            "reflection_attempts": attempts,
+            "reflection_decision": decision_payload,
+            "reflection_notes": reflection_notes + [decision.reason],
+            "reflection_exhausted": True,
+        }
+
     async def persist_session(self, state: SupervisorState) -> SupervisorState:
         text = state.get("message_text", "")
         response = state.get("final_response", "")
@@ -390,7 +487,11 @@ class SupervisorNodes:
                 metadata=_step_metadata(result),
             )
             if finalize_run:
-                status = "completed_with_errors" if result.get("errors") else "completed"
+                status = (
+                    "completed_with_errors"
+                    if result.get("errors") or result.get("reflection_exhausted")
+                    else "completed"
+                )
                 await self.trace_service.finish_run(
                     run_id,
                     status=status,
@@ -450,6 +551,10 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
     )
     graph.add_node("guardrail_check", nodes.traced("guardrail_check", nodes.guardrail_check))
     graph.add_node(
+        "reflect_result",
+        nodes.traced("reflect_result", nodes.reflect_result, step_type="tool"),
+    )
+    graph.add_node(
         "persist_session",
         nodes.traced("persist_session", nodes.persist_session, finalize_run=True),
     )
@@ -503,7 +608,15 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
     )
     graph.add_edge("run_general_search", "merge_agent_outputs")
     graph.add_edge("merge_agent_outputs", "guardrail_check")
-    graph.add_edge("guardrail_check", "persist_session")
+    graph.add_edge("guardrail_check", "reflect_result")
+    graph.add_conditional_edges(
+        "reflect_result",
+        _after_reflection,
+        {
+            "route_request": "route_request",
+            "persist_session": "persist_session",
+        },
+    )
     graph.add_edge("persist_session", END)
     return graph.compile()
 
@@ -537,4 +650,7 @@ def _step_metadata(state: SupervisorState) -> dict[str, object]:
         "pending_agents": list(state.get("pending_agents", [])),
         "completed_agents": list(state.get("completed_agents", [])),
         "route_capabilities": list(state.get("route", {}).get("capabilities", [])),
+        "reflection_attempts": int(state.get("reflection_attempts", 0) or 0),
+        "reflection_decision": dict(state.get("reflection_decision", {})),
+        "reflection_exhausted": bool(state.get("reflection_exhausted", False)),
     }

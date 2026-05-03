@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import re
+
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from news_agent.app.state import AgentResult, SupervisorState
@@ -53,7 +56,8 @@ class RuntimeSubagent:
                 if run is None:
                     return _response("Run not found.")
                 steps = await step_repo.list_for_run(run_id)
-                return _response(_format_trace(run.id, steps))
+                errors = await error_repo.list_for_run(run_id)
+                return _response(_format_trace(run, steps, errors))
 
             if command == "/step":
                 if len(args) < 2:
@@ -84,6 +88,15 @@ class RuntimeSubagent:
                 errors = await error_repo.list_for_run(runs[0].id)
                 return _response(_format_run(runs[0], steps, errors))
 
+            requested_run_id = _extract_run_id_from_text(message_text)
+            if requested_run_id is not None and _wants_trace_detail(message_text):
+                run = await run_repo.get(requested_run_id)
+                if run is None:
+                    return _response("Run not found.")
+                steps = await step_repo.list_for_run(requested_run_id)
+                errors = await error_repo.list_for_run(requested_run_id)
+                return _response(_format_trace(run, steps, errors))
+
             if "fail" in message_text.lower() or "error" in message_text.lower():
                 query = _extract_error_query(message_text)
                 if not query or _is_generic_error_query(query):
@@ -107,7 +120,10 @@ class RuntimeSubagent:
         async with self.session_factory() as session:
             alerts = await RuntimeAlertRepository(session).list_recent(limit=10)
         if not alerts:
-            return {"response": "No runtime alerts recorded yet.", "metadata": {"capability": "runtime_alerts"}}
+            return {
+                "response": "No runtime alerts recorded yet.",
+                "metadata": {"capability": "runtime_alerts"},
+            }
         lines = ["Recent runtime alerts:"]
         for alert in alerts:
             lines.append(
@@ -123,6 +139,21 @@ def _parse_run_id(args: list[str]) -> int | None:
         return int(args[0])
     except ValueError:
         return None
+
+
+def _extract_run_id_from_text(message_text: str) -> int | None:
+    match = re.search(r"\brun(?:\s+id)?\s*#?:?\s*(\d+)\b", message_text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"\btrace\s+(\d+)\b", message_text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _wants_trace_detail(message_text: str) -> bool:
+    lowered = message_text.lower()
+    return any(token in lowered for token in ("trace", "flow", "detail", "steps", "call"))
 
 
 def _response(text: str) -> AgentResult:
@@ -155,13 +186,59 @@ def _format_run(run, steps: list, errors: list) -> str:
     return "\n".join(lines)
 
 
-def _format_trace(run_id: int, steps: list) -> str:
+def _format_trace(run, steps: list, errors: list | None = None) -> str:
     if not steps:
-        return f"No step trace found for run {run_id}."
-    lines = [f"Trace for run {run_id}:"]
+        return f"No step trace found for run {run.id}."
+
+    errors = errors or []
+    children_by_parent: dict[int | None, list] = {}
     for step in steps:
+        children_by_parent.setdefault(step.parent_step_id, []).append(step)
+
+    lines = [
+        f"Trace for run {run.id}",
+        f"- Workflow: {run.workflow}",
+        f"- Status: {run.status}",
+        f"- Started: {run.started_at:%Y-%m-%d %H:%M:%S}",
+        (
+            f"- Completed: {run.completed_at:%Y-%m-%d %H:%M:%S}"
+            if run.completed_at
+            else "- Completed: n/a"
+        ),
+        f"- Summary: {run.summary or 'n/a'}",
+        "Flow:",
+    ]
+
+    rendered_ids: set[int] = set()
+
+    def render_step(step, *, depth: int, index: int) -> None:
+        rendered_ids.add(step.id)
         duration = f"{step.duration_ms}ms" if step.duration_ms is not None else "n/a"
-        lines.append(f"- {step.id} {step.step_name} [{step.step_type}] {step.status} {duration}")
+        indent = "  " * depth
+        prefix = f"{index}." if depth == 0 else "-"
+        lines.append(
+            f"{indent}{prefix} #{step.id} {step.step_name} "
+            f"[{step.step_type}] {step.status} {duration}"
+        )
+        metadata = _compact_metadata(step.step_metadata)
+        if metadata:
+            lines.append(f"{indent}   metadata: {metadata}")
+        if step.error_message:
+            lines.append(f"{indent}   error: {step.error_message}")
+        for child_index, child in enumerate(children_by_parent.get(step.id, []), start=1):
+            render_step(child, depth=depth + 1, index=child_index)
+
+    for index, step in enumerate(children_by_parent.get(None, []), start=1):
+        render_step(step, depth=0, index=index)
+
+    for step in steps:
+        if step.id not in rendered_ids:
+            render_step(step, depth=0, index=len(rendered_ids) + 1)
+
+    if errors:
+        lines.append("Errors:")
+        for item in errors:
+            lines.append(f"- #{item.step_id or 'n/a'} {item.step_name}: {item.error_message}")
     return "\n".join(lines)
 
 
@@ -183,6 +260,13 @@ def _format_errors(errors: list) -> str:
             f"- run {item.run_id} / {item.step_name}: {item.error_message}"
         )
     return "\n".join(lines)
+
+
+def _compact_metadata(metadata: dict | None) -> str:
+    payload = dict(metadata or {})
+    if not payload:
+        return ""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))[:500]
 
 
 def _extract_error_query(message_text: str) -> str:

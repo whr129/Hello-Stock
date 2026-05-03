@@ -38,6 +38,28 @@ Rules:
 - Return at most the requested candidate limit.
 """.strip()
 
+TURN_EXTRACTION_PROMPT = """
+You extract durable user memories from the latest Telegram chat turn.
+
+Return JSON with this shape:
+{"candidates":[
+  {
+    "text":"...",
+    "category":"preference|profile|location|watch_habit|constraint|other",
+    "confidence":0.0
+  }
+]}
+
+Rules:
+- Extract only facts or preferences that should be reused in future conversations.
+- Include profile facts such as the user's preferred name.
+- Include location facts and local-news preferences.
+- Include durable communication preferences and constraints.
+- Ignore questions, greetings, one-off tasks, and assistant claims.
+- Prefer normalized third-person wording, for example "User's preferred name is Howard."
+- Return an empty candidate list when there is nothing durable to remember.
+""".strip()
+
 CONSOLIDATION_PROMPT = """
 You decide how to merge a candidate memory into an existing memory pool.
 
@@ -49,6 +71,10 @@ Rules:
 - Use `update` when one existing memory should be revised or clarified.
 - Use `skip` when the candidate is transient, duplicated, or too weak.
 - Only choose `update` if an existing memory is clearly the same fact or preference.
+- Treat semantically equivalent wording as already represented. For example, "likes pizza" and
+  "loves pizza" should usually be skipped unless the candidate adds meaningful new detail.
+- Resolve conflicts by updating the most relevant existing memory with the best current durable
+  fact.
 """.strip()
 
 
@@ -194,11 +220,17 @@ class MemoryConsolidationService:
                     candidate_embedding = await self.embedding_service.embed_text(candidate.text)
                     nearest = await memory_repo.nearest_for_user(
                         user_id=job.user_id,
+                        memory_type=MemoryType.LEARNED,
                         query_embedding=candidate_embedding,
-                        limit=3,
+                        limit=self.settings.long_term_memory_top_k,
                     )
                     decision = await self.consolidate_candidate(candidate, nearest)
                     if decision.action == "add":
+                        memory_embedding = await self._embedding_for_decision(
+                            candidate=candidate,
+                            candidate_embedding=candidate_embedding,
+                            decision=decision,
+                        )
                         memory = await memory_repo.remember(
                             user_id=job.user_id,
                             text=decision.text,
@@ -210,11 +242,16 @@ class MemoryConsolidationService:
                         )
                         await embedding_repo.replace_memory_embedding(
                             memory.id,
-                            candidate_embedding,
+                            memory_embedding,
                             self.settings.embedding_model,
                         )
                         add_count += 1
                     elif decision.action == "update" and decision.memory_id:
+                        memory_embedding = await self._embedding_for_decision(
+                            candidate=candidate,
+                            candidate_embedding=candidate_embedding,
+                            decision=decision,
+                        )
                         memory = await memory_repo.update_memory(
                             memory_id=decision.memory_id,
                             text=decision.text,
@@ -225,7 +262,7 @@ class MemoryConsolidationService:
                         if memory:
                             await embedding_repo.replace_memory_embedding(
                                 memory.id,
-                                candidate_embedding,
+                                memory_embedding,
                                 self.settings.embedding_model,
                             )
                             update_count += 1
@@ -329,40 +366,126 @@ class MemoryConsolidationService:
                 )
                 content = response.choices[0].message.content or "{}"
                 payload = json.loads(content)
-                return [
-                    MemoryCandidate(
-                        text=item.get("text", "").strip(),
-                        category=item.get("category", "general"),
-                        confidence=float(item.get("confidence", 0.5)),
-                    )
-                    for item in payload.get("candidates", [])
-                    if item.get("text", "").strip()
-                ]
+                return _memory_candidates_from_payload(
+                    payload,
+                    limit=self.settings.memory_candidates_per_batch,
+                )
             except (APIError, ValueError, TypeError, json.JSONDecodeError):
                 pass
 
-        candidates: list[MemoryCandidate] = []
-        for event in events:
-            if event.role != "user":
-                continue
-            lowered = event.content.lower()
-            markers = (
-                "i prefer",
-                "remember",
-                "my region",
-                "my local",
-                "don't show",
-                "block",
+        return []
+
+    async def extract_turn_candidates(
+        self,
+        *,
+        user_message: str,
+        assistant_response: str = "",
+    ) -> list[MemoryCandidate]:
+        if not user_message.strip() or self.client is None:
+            return []
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.settings.openai_model,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": TURN_EXTRACTION_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Candidate limit: {self.settings.memory_candidates_per_batch}\n"
+                            "Latest turn:\n"
+                            f"user: {user_message[:4000]}\n"
+                            f"assistant: {assistant_response[:4000]}"
+                        ),
+                    },
+                ],
+                temperature=0,
             )
-            if any(marker in lowered for marker in markers):
-                candidates.append(
-                    MemoryCandidate(
-                        text=event.content.strip(),
-                        category="preference",
-                        confidence=0.6,
-                    )
+            content = response.choices[0].message.content or "{}"
+            payload = json.loads(content)
+            return _memory_candidates_from_payload(
+                payload,
+                limit=self.settings.memory_candidates_per_batch,
+            )
+        except (APIError, ValueError, TypeError, json.JSONDecodeError):
+            return []
+
+    async def remember_turn(
+        self,
+        *,
+        user_id: int,
+        user_message: str,
+        assistant_response: str = "",
+    ) -> dict[str, int]:
+        candidates = await self.extract_turn_candidates(
+            user_message=user_message,
+            assistant_response=assistant_response,
+        )
+        if not candidates:
+            return {"added": 0, "updated": 0, "skipped": 0}
+
+        added = 0
+        updated = 0
+        skipped = 0
+        async with session_scope(self.session_factory) as session:
+            memory_repo = MemoryRepository(session)
+            embedding_repo = EmbeddingRepository(session)
+            for candidate in candidates:
+                candidate_embedding = await self.embedding_service.embed_text(candidate.text)
+                nearest = await memory_repo.nearest_for_user(
+                    user_id=user_id,
+                    memory_type=MemoryType.EXPLICIT,
+                    query_embedding=candidate_embedding,
+                    limit=self.settings.long_term_memory_top_k,
                 )
-        return candidates[: self.settings.memory_candidates_per_batch]
+                decision = await self.consolidate_candidate(candidate, nearest)
+                if decision.action == "add":
+                    memory_embedding = await self._embedding_for_decision(
+                        candidate=candidate,
+                        candidate_embedding=candidate_embedding,
+                        decision=decision,
+                    )
+                    memory = await memory_repo.remember(
+                        user_id=user_id,
+                        text=decision.text,
+                        memory_type=MemoryType.EXPLICIT,
+                        source="chat_turn",
+                        confidence=decision.confidence,
+                        category=decision.category,
+                    )
+                    await embedding_repo.replace_memory_embedding(
+                        memory.id,
+                        memory_embedding,
+                        self.settings.embedding_model,
+                    )
+                    added += 1
+                elif decision.action == "update" and decision.memory_id:
+                    memory_embedding = await self._embedding_for_decision(
+                        candidate=candidate,
+                        candidate_embedding=candidate_embedding,
+                        decision=decision,
+                    )
+                    memory = await memory_repo.update_memory(
+                        memory_id=decision.memory_id,
+                        text=decision.text,
+                        category=decision.category,
+                        confidence=decision.confidence,
+                    )
+                    if memory:
+                        await embedding_repo.replace_memory_embedding(
+                            memory.id,
+                            memory_embedding,
+                            self.settings.embedding_model,
+                        )
+                        updated += 1
+                    else:
+                        skipped += 1
+                else:
+                    if decision.memory_id:
+                        await memory_repo.mark_seen(decision.memory_id)
+                    skipped += 1
+        return {"added": added, "updated": updated, "skipped": skipped}
 
     async def consolidate_candidate(
         self,
@@ -396,9 +519,15 @@ class MemoryConsolidationService:
                 )
                 content = response.choices[0].message.content or "{}"
                 payload = json.loads(content)
+                action = str(payload.get("action", "skip")).strip().lower()
+                if action not in {"add", "update", "skip"}:
+                    action = "skip"
+                memory_id = payload.get("memory_id")
+                if not isinstance(memory_id, int):
+                    memory_id = None
                 return MemoryDecision(
-                    action=str(payload.get("action", "skip")),
-                    memory_id=payload.get("memory_id"),
+                    action=action,
+                    memory_id=memory_id,
                     text=str(payload.get("text", candidate.text)).strip(),
                     category=str(payload.get("category", candidate.category)).strip() or "general",
                     confidence=float(payload.get("confidence", candidate.confidence)),
@@ -431,3 +560,34 @@ class MemoryConsolidationService:
             category=candidate.category,
             confidence=candidate.confidence,
         )
+
+    async def _embedding_for_decision(
+        self,
+        *,
+        candidate: MemoryCandidate,
+        candidate_embedding: list[float],
+        decision: MemoryDecision,
+    ) -> list[float]:
+        if decision.text.strip() == candidate.text.strip():
+            return candidate_embedding
+        return await self.embedding_service.embed_text(decision.text)
+
+
+def _memory_candidates_from_payload(payload: dict, *, limit: int) -> list[MemoryCandidate]:
+    candidates: list[MemoryCandidate] = []
+    for item in payload.get("candidates", []):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", "")).strip()
+        if not text:
+            continue
+        candidates.append(
+            MemoryCandidate(
+                text=text,
+                category=str(item.get("category", "other")).strip() or "other",
+                confidence=float(item.get("confidence", 0.5)),
+            )
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates

@@ -96,6 +96,10 @@ class SupervisorState(TypedDict, total=False):
     search_result: AgentResult
     runtime_run_id: int
     active_step_id: int
+    reflection_attempts: int
+    reflection_decision: dict[str, Any]
+    reflection_notes: list[str]
+    reflection_exhausted: bool
     final_response: str
     response: str
     errors: list[str]

@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     general_search_timeout_seconds: int = Field(
         default=30, alias="GENERAL_SEARCH_TIMEOUT_SECONDS"
     )
+    answer_reflection_enabled: bool = Field(default=True, alias="ANSWER_REFLECTION_ENABLED")
+    answer_reflection_max_retries: int = Field(default=1, alias="ANSWER_REFLECTION_MAX_RETRIES")
     runtime_alert_telegram_chat_id: int = Field(default=0, alias="RUNTIME_ALERT_TELEGRAM_CHAT_ID")
     runtime_retention_days: int = Field(default=30, alias="RUNTIME_RETENTION_DAYS")
     embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
