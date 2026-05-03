@@ -9,23 +9,33 @@ The application is refactored around a LangGraph supervisor that routes each inc
 
 The Telegram bot, scheduler, and persistence model remain in place. The active chat path no longer uses the previous generic tool registry or free-form ReAct fallback.
 
-## Memory Architecture
-Memory is split into two layers:
+## 2. Memory consolidation
+Memory remains split into two layers:
 
 - short-term memory: LangGraph-managed message state scoped to a Telegram chat thread
-- long-term memory: async consolidated user memory stored in a vector-backed memory pool
+- long-term memory: vector-backed durable user memory consolidated asynchronously
 
 Short-term memory should be maintained as rolling thread state and persisted between requests. It is used for immediate conversational continuity and `/memory` inspection.
 
-Long-term memory should no longer be stored synchronously on every qualifying message. Instead:
+Long-term memory should no longer be stored synchronously or as simple append-only records on every qualifying message. New durable memory candidates should be consolidated into the existing memory pool by merging related information, resolving conflicts, and minimizing redundant records.
+
+The scheduler-driven batch flow is:
 
 1. persist a conversation transcript
 2. enqueue a memory consolidation job after every 20 new user messages
-3. run extraction and consolidation asynchronously in the scheduler loop
-4. compare candidates against existing vector memories
-5. decide `add`, `update`, or `skip`
+3. run extraction asynchronously in the scheduler loop
+4. extract durable, atomic memory candidates
+5. consolidate each candidate asynchronously against existing vector memories
 
-The long-term memory store should support semantic retrieval rather than only latest-first listing.
+For each newly extracted memory candidate, consolidation should retrieve the top semantically similar active memories from the long-term store. Retrieval must be restricted to the same namespace and strategy. In this repository, namespace maps to `user_id`, and strategy maps to `memory_type`.
+
+The consolidation step should send the new candidate plus the retrieved existing memories to the LLM. The LLM should preserve semantic context when comparing memories so equivalent statements, such as "loves pizza" and "likes pizza", do not trigger unnecessary updates. It should return exactly one canonical outcome for each candidate:
+
+- `add`: create a new durable memory when no related active memory already captures the information
+- `update`: merge the candidate into an existing memory when it adds useful detail or resolves a conflict
+- `skip`: ignore the candidate when it is redundant, low value, or already semantically represented
+
+The long-term memory store should therefore support semantic retrieval, deduplication, conflict-aware updates, and lifecycle-aware active-memory filtering rather than only latest-first listing.
 
 ## Runtime Flow
 The interactive graph now runs the following sequence:
@@ -36,7 +46,16 @@ The interactive graph now runs the following sequence:
 4. `run_news_agent`, `run_market_agent`, and/or `run_runtime_agent`
 5. `merge_agent_outputs`
 6. `guardrail_check`
-7. `persist_session`
+7. `reflect_result`
+8. `persist_session`
+
+`reflect_result` is an LLM-backed quality-control node. It evaluates the original user request, classified intent, route, completed agents, subagent/search metadata, and guarded final response. It returns `pass`, `retry`, or `fail`.
+
+- `pass` continues to persistence.
+- `retry` may update intent and args, clear previous subagent/search outputs, and route again.
+- `fail` or exhausted retries returns the best available answer with a short user-facing note.
+
+Reflection retries are bounded by `ANSWER_REFLECTION_MAX_RETRIES`, defaulting to one. Reflection can be disabled with `ANSWER_REFLECTION_ENABLED=false`.
 
 Routing is capability-driven:
 
@@ -53,9 +72,11 @@ Routing is capability-driven:
 - `src/news_agent/app/supervisor.py`
   - top-level LangGraph builder
   - supervisor node implementations
-  - final response merge, guardrails, and session persistence
+  - final response merge, guardrails, reflection, and session persistence
 - `src/news_agent/app/state.py`
   - shared supervisor state contracts
+- `src/news_agent/agent/reflection.py`
+  - LLM reflection prompt, decision parsing, and retry/fail verdict handling
 
 ### News domain
 - `src/news_agent/domains/news/subagent.py`
@@ -104,6 +125,7 @@ The supervisor state owns:
 - `messages`: LangGraph-compatible short-term message state for the active chat thread
 - route metadata: ordered agents, requested capabilities, fallback response
 - subagent outputs: `news_result`, `market_result`, `runtime_result`
+- reflection metadata: attempts, latest decision, notes, and exhaustion flag
 - final output: `final_response`
 
 The memory subsystem additionally owns:
@@ -136,6 +158,7 @@ Each trace step should record:
 - Free-form `general_chat` handling is replaced by constrained help or explicit web-search routing.
 - Financial guardrails are applied only when market output is included.
 - Mixed requests can now combine a news brief with market analysis in one turn.
+- Candidate answers are reflected before persistence; clearly wrong routes can be retried once by default.
 - Short-term memory is maintained with LangGraph-style message state instead of a custom plain dict list.
 - Long-term memory is extracted asynchronously in batches of 20 user messages and consolidated into a vector-backed memory pool.
 - Every chat request and scheduler refresh should emit runtime traces that preserve the sequence of node, subagent, and provider calls.
@@ -151,7 +174,7 @@ Each trace step should record:
 - `/step <run-id> <step-name>` for one refresh step or node/provider call
 - `/alerts` for recent failures and alertable events
 
-Equivalent natural-language queries should also route to `runtime_agent` when they are clearly about execution history, refresh behavior, or recent runtime errors.
+Equivalent natural-language queries should also route to `runtime_agent` when they are clearly about execution history, refresh behavior, or recent runtime errors. Trace output includes run metadata, step metadata, parent/child nesting when recorded, and any runtime errors for the run.
 
 ## Alerting
 Runtime alerts should be delivered to a configured Telegram admin chat, not to every end user. Alerts should include:

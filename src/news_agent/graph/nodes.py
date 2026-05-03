@@ -18,9 +18,12 @@ from news_agent.ingestion.dedupe import content_hash
 from news_agent.ingestion.providers import IngestProviderRegistry
 from news_agent.markets.yahoo import YahooMarketDataProvider
 from news_agent.memory.embeddings import EmbeddingService
-from news_agent.memory.long_term import memory_from_user_text, should_store_memory
 from news_agent.memory.short_term import append_message, expiry
-from news_agent.observability.runtime import RuntimeAlertService, RuntimeTraceService, summarize_run_state
+from news_agent.observability.runtime import (
+    RuntimeAlertService,
+    RuntimeTraceService,
+    summarize_run_state,
+)
 from news_agent.settings import Settings
 from news_agent.storage.models import JobRun, Source
 from news_agent.storage.repositories import (
@@ -251,31 +254,10 @@ class GraphNodes:
             )
             await session.commit()
 
-        if not should_store_memory(text):
-            logger.info(
-                "chat persisted short-term memory chat_id=%s message_count=%s",
-                state["chat_id"],
-                len(short_term_state.get("messages", [])),
-            )
-            return {**state, "short_term_memory": short_term_state}
-
-        async with self.session_factory() as session:
-            memory = await MemoryRepository(session).remember(
-                user_id=state["user_id"],
-                text=memory_from_user_text(text),
-            )
-            embedding = await self.embedding_service.embed_text(memory.memory_text)
-            await EmbeddingRepository(session).save_memory_embedding(
-                memory.id,
-                embedding,
-                self.settings.embedding_model,
-            )
-            await session.commit()
-
         logger.info(
-            "chat persisted long-term memory user_id=%s chat_id=%s",
-            state["user_id"],
+            "chat persisted memory chat_id=%s message_count=%s",
             state["chat_id"],
+            len(short_term_state.get("messages", [])),
         )
         return {**state, "short_term_memory": short_term_state}
 
@@ -471,7 +453,11 @@ class SchedulerNodes:
                 result = await func(state)
             except Exception as exc:
                 message = str(exc)
-                await self.trace_service.finish_step(step_id, status="failed", error_message=message)
+                await self.trace_service.finish_step(
+                    step_id,
+                    status="failed",
+                    error_message=message,
+                )
                 error_id = await self.trace_service.record_error(
                     run_id=run_id,
                     workflow=workflow,
@@ -621,7 +607,10 @@ class SchedulerNodes:
                     ),
                     timeout_seconds=self.settings.rss_fetch_timeout_seconds + 2,
                 )
-                provider_counts[source["provider"]] = provider_counts.get(source["provider"], 0) + len(articles)
+                provider_counts[source["provider"]] = provider_counts.get(
+                    source["provider"],
+                    0,
+                ) + len(articles)
                 await self.trace_service.finish_step(
                     provider_step_id,
                     status="completed",

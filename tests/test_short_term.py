@@ -23,3 +23,17 @@ def test_serialize_round_trip_preserves_messages() -> None:
     restored = deserialize_state(payload)
 
     assert [item.content for item in restored["messages"]] == ["hello", "hi"]
+
+
+def test_deserialize_state_supports_legacy_role_content_messages() -> None:
+    restored = deserialize_state(
+        {
+            "messages": [
+                {"role": "user", "content": "old hello", "at": "2026-05-02T05:39:19+00:00"},
+                {"role": "assistant", "content": "old hi"},
+            ]
+        }
+    )
+
+    assert [item.type for item in restored["messages"]] == ["human", "ai"]
+    assert [item.content for item in restored["messages"]] == ["old hello", "old hi"]

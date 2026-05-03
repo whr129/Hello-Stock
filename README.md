@@ -11,6 +11,7 @@ Telegram assistant for personalized news, stock snapshots, technical analysis, r
   - `runtime_agent` for refresh inspection, trace lookup, error review, alert summaries, and calling-history debugging.
 - Uses LangGraph-style short-term memory per chat thread and an async long-term memory pipeline backed by a vector store.
 - Answers off-domain or stale-data queries with OpenAI web search.
+- Reflects on each candidate answer before persistence so clearly wrong routes can retry once.
 - Runs a scheduler that refreshes source content, market snapshots, summaries, daily recaps, long-term memory jobs, runtime traces, alerts, and retention cleanup.
 
 ## Stack
@@ -40,7 +41,9 @@ flowchart TD
     runtime --> merge
     search --> merge
     merge --> guardrails[financial guardrails]
-    guardrails --> persist[persist transcript + memory + runtime state]
+    guardrails --> reflect[answer reflection]
+    reflect -->|retry route once| router
+    reflect --> persist[persist transcript + memory + runtime state]
     persist --> reply[Telegram reply]
 ```
 
@@ -81,6 +84,8 @@ OPENAI_API_KEY=
 Useful optional memory settings:
 
 ```bash
+ANSWER_REFLECTION_ENABLED=true
+ANSWER_REFLECTION_MAX_RETRIES=1
 SHORT_TERM_MEMORY_WINDOW_SIZE=20
 SHORT_TERM_MEMORY_EXPIRY_MINUTES=60
 LONG_TERM_MEMORY_BATCH_SIZE=20
@@ -167,7 +172,17 @@ The runtime layer records:
 - ordered step traces for supervisor nodes, subagent calls, provider fetches, and tool-like operations
 - normalized runtime errors linked to a run and step
 
-Use `/runtime` for the latest summary, `/job` for one run, `/trace` for the ordered call sequence, and `/step` to inspect one refresh or provider step during debugging.
+Use `/runtime` for the latest summary, `/job` for one run, `/trace` for the ordered call sequence, and `/step` to inspect one refresh or provider step during debugging. `/trace <run-id>` includes the run status, timestamps, summary, step metadata, nested child steps when present, and any recorded errors.
+
+## Answer Reflection
+
+After a candidate response passes normal guardrails, the supervisor asks a conservative reflection model whether the selected route and answer match the user request. Reflection can return `pass`, `retry`, or `fail`.
+
+- `pass`: persist and return the answer.
+- `retry`: clear prior subagent/search outputs, apply the corrected intent and args, and rerun routing once by default.
+- `fail` or exhausted retry limit: return the best available answer with a short user-facing note.
+
+Reflection is controlled by `ANSWER_REFLECTION_ENABLED` and `ANSWER_REFLECTION_MAX_RETRIES`. Reflection decisions are recorded in runtime step metadata, and exhausted reflection marks the chat run as `completed_with_errors`.
 
 ## Memory System
 
