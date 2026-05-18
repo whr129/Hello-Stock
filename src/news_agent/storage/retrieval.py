@@ -47,7 +47,9 @@ class RetrievalService:
 
         summaries = list(
             (
-                await self.session.execute(self._summary_query(user_id, limit, summary_max_age_hours, now))
+                await self.session.execute(
+                    self._summary_query(user_id, limit, summary_max_age_hours, now)
+                )
             ).scalars()
         )
 

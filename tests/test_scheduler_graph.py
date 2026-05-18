@@ -24,7 +24,16 @@ class DummySchedulerNodes:
     async def precompute_summaries(self, state):
         return {**state, "summaries": ["Example summary"]}
 
+    async def extract_mentions(self, state):
+        return {**state, "metadata": {**state.get("metadata", {}), "mention_count": 1}}
+
+    async def score_signals(self, state):
+        return {**state, "metadata": {**state.get("metadata", {}), "signal_count": 1}}
+
     async def quality_check(self, state):
+        return state
+
+    async def cleanup_market_research(self, state):
         return state
 
     async def retry_or_recover(self, state):

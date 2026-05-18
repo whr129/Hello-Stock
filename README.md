@@ -1,18 +1,19 @@
 # Hello Stock
 
-Telegram assistant for personalized news, stock snapshots, technical analysis, runtime debugging, and general web questions. The project uses a LangGraph supervisor, Postgres + pgvector, and OpenAI for routing, summarization, embeddings, web search, and memory consolidation.
+Telegram assistant for market-impact research, stock snapshots, technical analysis, runtime debugging, memory, source management, and general web questions. The project uses a LangGraph supervisor, Postgres + pgvector, and OpenAI for routing, summarization, embeddings, web search, and memory consolidation.
 
 ## What It Does
 
 - Routes Telegram messages through a LangGraph supervisor.
-- Uses three subagents:
-  - `news_agent` for briefs, topics, local preferences, source management, recap settings, and memory tools.
-  - `market_agent` for watchlists, live quotes, and lightweight technical analysis.
+- Uses focused subagents:
+  - `news_agent` for source management, refresh control, skills/help, and memory tools.
+  - `research_agent` for market-impact extraction, signal scoring, candidates, and ticker evidence.
+  - `market_agent` for explicit ticker quotes and lightweight technical analysis.
   - `runtime_agent` for refresh inspection, trace lookup, error review, alert summaries, and calling-history debugging.
 - Uses LangGraph-style short-term memory per chat thread and an async long-term memory pipeline backed by a vector store.
 - Answers off-domain or stale-data queries with OpenAI web search.
 - Reflects on each candidate answer before persistence so clearly wrong routes can retry once.
-- Runs a scheduler that refreshes source content, market snapshots, summaries, daily recaps, long-term memory jobs, runtime traces, alerts, and retention cleanup.
+- Runs a scheduler that refreshes market-impact source content, market snapshots, summaries, signal scoring, long-term memory jobs, runtime traces, alerts, and retention cleanup.
 
 ## Stack
 
@@ -55,10 +56,11 @@ flowchart TD
     refresh -->|yes| fetch[fetch sources + market snapshots]
     fetch --> store[dedupe and persist]
     store --> summarize[precompute summaries + embeddings]
-    summarize --> memory[memory consolidation jobs]
+    summarize --> mentions[extract market mentions]
+    mentions --> score[score candidate signals]
+    score --> memory[memory consolidation jobs]
     memory --> trace[persist run + step traces]
-    trace --> recap[send due daily recaps]
-    recap --> alerts[push runtime alerts]
+    trace --> alerts[push runtime alerts]
     alerts --> cleanup[retention cleanup]
 ```
 
@@ -87,7 +89,8 @@ Useful optional memory settings:
 ANSWER_REFLECTION_ENABLED=true
 ANSWER_REFLECTION_MAX_RETRIES=1
 SHORT_TERM_MEMORY_WINDOW_SIZE=20
-SHORT_TERM_MEMORY_EXPIRY_MINUTES=60
+SHORT_TERM_MEMORY_EXPIRY_MINUTES=43200
+CONVERSATION_EVENT_RETENTION_DAYS=30
 LONG_TERM_MEMORY_BATCH_SIZE=20
 LONG_TERM_MEMORY_TOP_K=5
 MEMORY_CANDIDATES_PER_BATCH=6
@@ -119,24 +122,24 @@ PYTHONPATH=src .venv/bin/ruff check .
 
 - `src/news_agent/app/supervisor.py` is the main LangGraph entrypoint.
 - `src/news_agent/domains/news/`, `domains/market/`, and `domains/runtime/` hold the subagents.
+- `src/news_agent/research/` contains planner-driven market research extraction, scoring, and reporting.
 - `src/news_agent/memory/` contains the short-term message-state helpers and the async long-term memory consolidation service.
 - `src/news_agent/observability/` records runtime runs, ordered step traces, errors, and alert deliveries.
 - `src/news_agent/graph/chat_graph.py` remains a compatibility entrypoint that delegates to the supervisor graph.
 
 ## Telegram Commands
 
-- `/brief`, `/stocks <ticker...>`, `/watch <ticker...>`, `/unwatch <ticker...>`
-- `/topics <topic...>`, `/local <region>`
+- `/stocks <ticker...>`
+- `/research`, `/candidates`, `/signals <ticker>`, `/researchstatus`
 - `/sources`, `/addsource <provider> <target>`, `/sourceconfig <id> <key> <value>`, `/sourcefields <id> <field> <value>`, `/sourcetest <id>`, `/removesource <id>`
 - `/refresh`
 - `/runtime`, `/job <run-id>`, `/trace <run-id>`, `/step <run-id> <step-name>`, `/alerts`
-- `/timezone <Area/City>`, `/recaptime <HH:MM>`, `/recapoff`, `/recapstatus`
 - `/memory`, `/forget <memory-id>`, `/resetmemory`
 - `/skills`, `/help`
 
 You can also ask natural-language questions directly, for example:
 - `what's google performance today`
-- `brief me on nvidia and today's ai news`
+- `research nvidia and today's ai capex news`
 - `who won the world series last year?`
 - `what happened in the last refresh?`
 - `what was the error in the last refresh?`
@@ -168,7 +171,7 @@ Set `RUNTIME_ALERT_TELEGRAM_CHAT_ID` to a Telegram chat id if you want operator-
 ## Runtime History
 
 The runtime layer records:
-- run headers for chat requests, scheduled refreshes, manual refreshes, and daily recaps
+- run headers for chat requests, scheduled refreshes, and manual refreshes
 - ordered step traces for supervisor nodes, subagent calls, provider fetches, and tool-like operations
 - normalized runtime errors linked to a run and step
 

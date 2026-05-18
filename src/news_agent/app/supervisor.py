@@ -26,14 +26,13 @@ from news_agent.observability.runtime import (
     RuntimeTraceService,
     summarize_run_state,
 )
+from news_agent.research.agents import ResearchSubagent
 from news_agent.search.service import GeneralSearchService
 from news_agent.settings import Settings
 from news_agent.storage.repositories import (
     ConversationEventRepository,
     MemoryRepository,
-    PreferenceRepository,
     ShortTermSessionRepository,
-    TickerRepository,
     UserRepository,
 )
 
@@ -41,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 REFLECTION_EXHAUSTED_NOTE = (
     "Note: I could not confidently repair this answer after a reflection retry. "
-    "You may want to rephrase or use a direct command such as /brief, /stocks, or /runtime."
+    "You may want to rephrase or use a direct command such as /research, /stocks, or /runtime."
 )
 
 
@@ -55,6 +54,8 @@ def _next_step(state: SupervisorState) -> str:
         return "run_news_agent"
     if pending[0] == "runtime":
         return "run_runtime_agent"
+    if pending[0] == "research":
+        return "run_research_agent"
     return "run_market_agent"
 
 
@@ -85,6 +86,7 @@ class SupervisorNodes:
         self.news_agent = NewsSubagent(session_factory, settings)
         self.market_agent = MarketSubagent(session_factory, settings, YahooMarketDataProvider())
         self.runtime_agent = RuntimeSubagent(session_factory, settings)
+        self.research_agent = ResearchSubagent(session_factory, settings)
         self.search_service = GeneralSearchService(settings)
         self.reflection_service = ReflectionService(settings)
         self.embedding_service = EmbeddingService(settings)
@@ -98,8 +100,6 @@ class SupervisorNodes:
             user = await UserRepository(session, self.settings).get_or_create_user(
                 state["telegram_user_id"]
             )
-            preference = await PreferenceRepository(session).get_for_user(user.id)
-            tickers = await TickerRepository(session).list_for_user(user.id)
             stored_state = await ShortTermSessionRepository(session).get_state(state["chat_id"])
             short_term_state = deserialize_state(stored_state)
             memories = await MemoryRepository(session).semantic_search_for_user(
@@ -118,10 +118,6 @@ class SupervisorNodes:
             "messages": list(short_term_state.get("messages", [])),
             "user_context": {
                 "user_id": user.id,
-                "local_region": user.local_region,
-                "timezone": user.timezone,
-                "topics": preference.topics,
-                "watched_tickers": tickers,
                 "short_term_memory": serialize_state(
                     short_term_state,
                     max_messages=self.settings.short_term_memory_window_size,
@@ -201,6 +197,17 @@ class SupervisorNodes:
             "completed_agents": completed,
         }
 
+    async def run_research_agent(self, state: SupervisorState) -> SupervisorState:
+        result = await self.research_agent.run(state)
+        pending = [agent for agent in state.get("pending_agents", []) if agent != "research"]
+        completed = list(state.get("completed_agents", [])) + ["research"]
+        return {
+            **state,
+            "research_result": result,
+            "pending_agents": pending,
+            "completed_agents": completed,
+        }
+
     async def run_general_search(self, state: SupervisorState) -> SupervisorState:
         result = await self.search_service.search(
             _build_search_query(state),
@@ -232,6 +239,7 @@ class SupervisorNodes:
             news_response = state.get("news_result", {}).get("response")
             market_response = state.get("market_result", {}).get("response")
             runtime_response = state.get("runtime_result", {}).get("response")
+            research_response = state.get("research_result", {}).get("response")
             search_response = state.get("search_result", {}).get("response")
             news_meta = state.get("news_result", {}).get("metadata", {})
             market_meta = state.get("market_result", {}).get("metadata", {})
@@ -242,6 +250,8 @@ class SupervisorNodes:
                 parts.append(market_response)
             if runtime_response:
                 parts.append(runtime_response)
+            if research_response:
+                parts.append(research_response)
             if search_response:
                 if general_only:
                     parts = [search_response]
@@ -273,7 +283,9 @@ class SupervisorNodes:
     async def guardrail_check(self, state: SupervisorState) -> SupervisorState:
         response = state.get("final_response", "")
         capabilities = set(state.get("route", {}).get("capabilities", []))
-        if state.get("market_result", {}).get("response") or (
+        if state.get("research_result", {}).get("response"):
+            response = enforce_financial_guardrails(response)
+        elif state.get("market_result", {}).get("response") or (
             state.get("search_result", {}).get("response")
             and {"market_snapshot", "technical_analysis"} & capabilities
         ):
@@ -338,6 +350,7 @@ class SupervisorNodes:
                 "news_result": {},
                 "market_result": {},
                 "runtime_result": {},
+                "research_result": {},
                 "search_result": {},
                 "final_response": "",
                 "response": "",
@@ -525,6 +538,20 @@ class SupervisorNodes:
 def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settings):
     nodes = SupervisorNodes(session_factory, settings)
     graph = StateGraph(SupervisorState)
+    research_handler = getattr(nodes, "run_research_agent", None)
+
+    async def fallback_research_agent(state: SupervisorState) -> SupervisorState:
+        pending = [agent for agent in state.get("pending_agents", []) if agent != "research"]
+        completed = list(state.get("completed_agents", [])) + ["research"]
+        return {
+            **state,
+            "research_result": {
+                "response": "Market research is unavailable in this graph configuration.",
+                "metadata": {"capability": "market_research", "status": "unavailable"},
+            },
+            "pending_agents": pending,
+            "completed_agents": completed,
+        }
 
     graph.add_node("load_user_context", nodes.traced("load_user_context", nodes.load_user_context))
     graph.add_node("classify_request", nodes.traced("classify_request", nodes.classify_request))
@@ -540,6 +567,14 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
     graph.add_node(
         "run_runtime_agent",
         nodes.traced("run_runtime_agent", nodes.run_runtime_agent, step_type="subagent"),
+    )
+    graph.add_node(
+        "run_research_agent",
+        nodes.traced(
+            "run_research_agent",
+            research_handler or fallback_research_agent,
+            step_type="subagent",
+        ),
     )
     graph.add_node(
         "run_general_search",
@@ -569,6 +604,7 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
             "run_news_agent": "run_news_agent",
             "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
+            "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",
             "merge_agent_outputs": "merge_agent_outputs",
         },
@@ -580,6 +616,7 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
             "run_news_agent": "run_news_agent",
             "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
+            "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",
             "merge_agent_outputs": "merge_agent_outputs",
         },
@@ -591,6 +628,19 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
             "run_news_agent": "run_news_agent",
             "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
+            "run_research_agent": "run_research_agent",
+            "run_general_search": "run_general_search",
+            "merge_agent_outputs": "merge_agent_outputs",
+        },
+    )
+    graph.add_conditional_edges(
+        "run_research_agent",
+        _next_step,
+        {
+            "run_news_agent": "run_news_agent",
+            "run_market_agent": "run_market_agent",
+            "run_runtime_agent": "run_runtime_agent",
+            "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",
             "merge_agent_outputs": "merge_agent_outputs",
         },
@@ -602,6 +652,7 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
             "run_news_agent": "run_news_agent",
             "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
+            "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",
             "merge_agent_outputs": "merge_agent_outputs",
         },

@@ -7,38 +7,63 @@ from news_agent.agent.router import extract_stock_symbols, parse_message
 from news_agent.graph.state import Intent
 from news_agent.settings import Settings
 
-ROUTABLE_INTENTS: set[Intent] = {"brief", "stocks", "runtime", "general_chat", "help"}
+ROUTABLE_INTENTS: set[Intent] = {
+    "stocks",
+    "runtime",
+    "research",
+    "candidates",
+    "signals",
+    "general_chat",
+    "help",
+}
 ROUTER_SYSTEM_PROMPT = """
 You are the routing layer for a Telegram assistant with three product surfaces:
-1. News coverage
+1. Market-impact research
 2. Market quotes and technical analysis
 3. Runtime debugging and execution-history lookup
 
 Return only valid JSON with this exact schema:
 {
-  "intent": "brief" | "stocks" | "runtime" | "general_chat" | "help",
+  "intent": "stocks" | "runtime" | "research" | "candidates"
+    | "signals" | "general_chat" | "help",
   "args": ["STRING", "..."]
 }
 
 Routing policy:
-- Use "stocks" for requests about stock price, quote, performance, movement, ticker lookup, chart-style commentary, or technical analysis.
-- Use "brief" for news briefs, headlines, summaries, what happened today, market news, company news, or mixed requests that ask for both company/market performance and related news.
-- Use "runtime" for requests about runtime history, refresh steps, execution traces, recent failures, alerts, job status, or debugging what happened during a run.
+- Use "stocks" for requests about stock price, quote, performance, movement,
+  ticker lookup, chart-style commentary, or technical analysis.
+- Use "research" for market-impact questions about finance, earnings, filings,
+  macro, company-impacting technology, policy/regulatory, or geopolitics with
+  plausible market relevance.
+- Use "runtime" for requests about runtime history, refresh steps, execution
+  traces, recent failures, alerts, job status, or debugging what happened
+  during a run.
+- Use "candidates" for requests about names, stocks, or themes starting to get
+  attention, weak signals, emerging attention, or current rankings.
+- Use "signals" for requests asking why a specific ticker is ranked or showing
+  up in market research signals.
+- Use "research" for deep market research requests across themes, candidates,
+  market-moving news, or attention/momentum signals.
 - Use "help" when the user is explicitly asking what the assistant can do or how to use it.
-- Use "general_chat" for casual conversation, broad factual questions, and general current-events questions outside the news-brief and stock-analysis flows. These requests will be answered with general web search.
+- Use "general_chat" for casual conversation, broad factual questions, and
+  general current-events questions outside market research and stock-analysis
+  flows. These requests will be answered with general web search.
 
 Args policy:
 - For "stocks", args should contain canonical ticker symbols when identifiable from the message.
-- For "brief", args should contain any identifiable ticker symbols only when they are relevant to the requested news brief.
+- For "research" and "signals", args should contain identifiable ticker symbols
+  when relevant.
 - If a company name clearly maps to a public ticker, resolve it to the ticker.
 - Do not invent tickers when the entity is ambiguous or not clearly public.
 - Keep args empty when no useful structured symbol extraction is possible.
 
 Examples:
 - "what's google performance today" -> {"intent":"stocks","args":["GOOGL"]}
-- "brief me on nvidia and today's ai news" -> {"intent":"brief","args":["NVDA"]}
-- "what happened in the stock market today" -> {"intent":"brief","args":[]}
+- "research nvidia and today's ai capex news" -> {"intent":"research","args":["NVDA"]}
+- "what happened in the stock market today" -> {"intent":"research","args":[]}
 - "what happened in the last refresh?" -> {"intent":"runtime","args":[]}
+- "what names are starting to get attention?" -> {"intent":"candidates","args":[]}
+- "why is MU showing up in the candidates list?" -> {"intent":"signals","args":["MU"]}
 - "what can you do?" -> {"intent":"help","args":[]}
 - "who won the world series last year?" -> {"intent":"general_chat","args":[]}
 - "hello" -> {"intent":"general_chat","args":[]}
@@ -90,7 +115,7 @@ class IntentClassifier:
             routed_args = []
 
         normalized_args = self._normalize_args(routed_args)
-        if routed_intent in {"stocks", "brief"} and not normalized_args:
+        if routed_intent in {"stocks", "research", "signals"} and not normalized_args:
             normalized_args = extract_stock_symbols(text)
         return "", normalized_args, routed_intent
 
@@ -104,6 +129,32 @@ class IntentClassifier:
             for term in ("last refresh", "during refresh", "runtime", "trace", "alert", "debug")
         ):
             return "", [], "runtime"
+        if any(
+            term in lowered
+            for term in ("starting to get attention", "weak signals", "candidates")
+        ):
+            return "", symbols, "candidates"
+        if (
+            "why" in lowered
+            and symbols
+            and any(term in lowered for term in ("rank", "signal", "showing up"))
+        ):
+            return "", symbols, "signals"
+        if any(
+            term in lowered
+            for term in (
+                "deep research",
+                "market news",
+                "stock market today",
+                "earnings",
+                "filings",
+                "macro",
+                "regulation",
+                "policy",
+                "geopolitics",
+            )
+        ):
+            return "", symbols, "research"
         if symbols:
             return "", symbols, "stocks"
         return "", [], "general_chat"

@@ -16,7 +16,7 @@ You answer Telegram user questions using web search.
 Requirements:
 - Answer the user's question directly and concisely.
 - You may receive trusted bot context before the user question. Use that context for
-  personal questions about the user, preferences, memory, location, topics, or watchlist.
+  personal questions about durable memory or recent conversation only.
 - If the trusted bot context contains the answer, answer from it instead of claiming
   that you do not have memory or personal information.
 - If the trusted bot context does not contain the requested personal fact, say that it
@@ -65,7 +65,10 @@ class GeneralSearchService:
         if self.client is None:
             return SearchResult(
                 query=normalized_query,
-                answer="General web search is unavailable right now. Try /brief or /stocks SYMBOL.",
+                answer=(
+                    "General web search is unavailable right now. "
+                    "Try /research or /stocks SYMBOL."
+                ),
                 sources=[],
                 metadata={"status": "unavailable"},
             )
@@ -149,21 +152,9 @@ def _build_contextual_input(query: str, user_context: dict[str, Any]) -> str:
 
 def _format_user_context(user_context: dict[str, Any]) -> list[str]:
     lines: list[str] = []
-    local_region = user_context.get("local_region")
-    timezone = user_context.get("timezone")
-    topics = user_context.get("topics") or []
-    tickers = user_context.get("watched_tickers") or []
     memories = user_context.get("long_term_memory") or []
     recent_messages = _recent_message_lines(user_context.get("short_term_memory"))
 
-    if local_region:
-        lines.append(f"- Local region: {local_region}")
-    if timezone:
-        lines.append(f"- Timezone: {timezone}")
-    if topics:
-        lines.append("- Preferred topics: " + ", ".join(str(item) for item in topics))
-    if tickers:
-        lines.append("- Watched tickers: " + ", ".join(str(item) for item in tickers))
     if memories:
         lines.append("- Long-term memories:")
         lines.extend(f"  - {memory}" for memory in memories[:8])
@@ -191,11 +182,5 @@ def _recent_message_lines(short_term_memory: Any) -> list[str]:
 
 
 def _user_location(user_context: dict[str, Any]) -> dict[str, Any]:
-    timezone = user_context.get("timezone")
-    region = user_context.get("local_region")
-    location = {"type": "approximate", "country": "US"}
-    if region:
-        location["city"] = region
-    if timezone:
-        location["timezone"] = timezone
-    return location
+    del user_context
+    return {"type": "approximate", "country": "US"}

@@ -5,6 +5,8 @@ Revises: 0003_runtime_observability
 Create Date: 2026-05-02
 """
 
+# ruff: noqa: E501
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa

@@ -1,7 +1,7 @@
 from news_agent.agent.tools import _requested_tickers
 
 
-def test_requested_tickers_uses_watchlist_for_general_stock_question() -> None:
+def test_requested_tickers_does_not_use_removed_watchlist_context() -> None:
     tickers = _requested_tickers(
         {
             "command": "",
@@ -11,7 +11,7 @@ def test_requested_tickers_uses_watchlist_for_general_stock_question() -> None:
         }
     )
 
-    assert tickers == ["AAPL", "TSLA"]
+    assert tickers == []
 
 
 def test_requested_tickers_allows_cashtags_and_uppercase_mentions() -> None:

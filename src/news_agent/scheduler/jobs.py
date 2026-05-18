@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 
 from news_agent.graph.scheduler_graph import build_scheduler_graph
 from news_agent.logging import configure_logging

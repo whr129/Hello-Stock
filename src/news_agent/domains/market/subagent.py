@@ -9,7 +9,6 @@ from news_agent.app.state import AgentResult, SupervisorState
 from news_agent.markets.provider import MarketDataProvider
 from news_agent.observability.runtime import RuntimeTraceService
 from news_agent.settings import Settings
-from news_agent.storage.repositories import TickerRepository
 from news_agent.storage.retrieval import RetrievalService
 
 
@@ -26,52 +25,13 @@ class MarketSubagent:
         self.trace_service = RuntimeTraceService(session_factory, settings)
 
     async def run(self, state: SupervisorState) -> AgentResult:
-        capabilities = set(state.get("route", {}).get("capabilities", []))
-        if "watchlist_admin" in capabilities:
-            return await self._watchlist_admin(state)
         return await self._market_snapshot(state)
-
-    async def _watchlist_admin(self, state: SupervisorState) -> AgentResult:
-        command = state.get("command", "")
-        args = state.get("args", [])
-        user_id = state["user_context"]["user_id"]
-        async with self.session_factory() as session:
-            repository = TickerRepository(session)
-            if command == "/watch":
-                added = await repository.add_many(user_id, args)
-                await session.commit()
-                current = sorted(set(state["user_context"].get("watched_tickers", [])) | set(added))
-                state["user_context"]["watched_tickers"] = current
-                return {
-                    "response": f"Now watching: {', '.join(added) or 'no new tickers'}",
-                    "metadata": {"capability": "watchlist_admin"},
-                }
-
-            if command == "/unwatch":
-                removed = await repository.remove_many(user_id, args)
-                await session.commit()
-                removed_set = set(removed)
-                current = [
-                    ticker
-                    for ticker in state["user_context"].get("watched_tickers", [])
-                    if ticker not in removed_set
-                ]
-                state["user_context"]["watched_tickers"] = current
-                return {
-                    "response": f"Removed: {', '.join(removed) or 'none'}",
-                    "metadata": {"capability": "watchlist_admin"},
-                }
-
-        return {
-            "response": "Watchlist request could not be completed.",
-            "metadata": {"capability": "watchlist_admin"},
-        }
 
     async def _market_snapshot(self, state: SupervisorState) -> AgentResult:
         tickers = requested_tickers(state)
         if not tickers:
             return {
-                "response": "You are not watching any tickers yet. Use /watch AAPL TSLA to add some.",
+                "response": "Use /stocks <ticker...>, for example /stocks AAPL TSLA.",
                 "metadata": {
                     "capability": "market_snapshot",
                     "ticker_count": 0,
@@ -184,8 +144,4 @@ def requested_tickers(state: SupervisorState) -> list[str]:
     if symbols:
         return symbols
 
-    user_context = state.get("user_context", {})
-    watched = [ticker.upper() for ticker in user_context.get("watched_tickers", [])]
-    if not watched:
-        watched = [ticker.upper() for ticker in state.get("watched_tickers", [])]
-    return sorted(dict.fromkeys(watched))
+    return []

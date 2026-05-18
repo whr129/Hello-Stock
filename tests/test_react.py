@@ -22,4 +22,4 @@ async def test_react_responder_explains_capabilities_without_llm() -> None:
     result = await responder.respond("what can you do?", {})
 
     assert result.action == "explain_capabilities"
-    assert "/brief" in result.answer
+    assert "/research" in result.answer

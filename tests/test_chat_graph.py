@@ -234,7 +234,7 @@ async def test_chat_graph_reflection_exhaustion_persists_note(monkeypatch) -> No
     class ReflectionExhaustedNodes(DummySupervisorNodes):
         note = (
             "Note: I could not confidently repair this answer after a reflection retry. "
-            "You may want to rephrase or use a direct command such as /brief, /stocks, "
+            "You may want to rephrase or use a direct command such as /research, /stocks, "
             "or /runtime."
         )
 

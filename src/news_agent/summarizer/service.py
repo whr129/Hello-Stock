@@ -57,7 +57,6 @@ class Summarizer:
         self,
         headlines: list[str],
         market_lines: list[str],
-        local_region: str,
     ) -> str:
         if self.client and (headlines or market_lines):
             try:
@@ -67,14 +66,14 @@ class Summarizer:
                         {
                             "role": "system",
                             "content": (
-                                "Create a concise digest grouped by World, Local, and Markets. "
+                                "Create a concise market-impact digest grouped by companies, "
+                                "macro, and policy. "
                                 "Use only provided facts. Do not provide financial advice."
                             ),
                         },
                         {
                             "role": "user",
                             "content": (
-                                f"Local region: {local_region}\n"
                                 f"Headlines:\n{chr(10).join(headlines[:20])}\n\n"
                                 f"Market context:\n{chr(10).join(market_lines[:10])}"
                             ),
@@ -88,7 +87,7 @@ class Summarizer:
             except APIError:
                 pass
 
-        sections = [f"Digest for local region: {local_region}"]
+        sections = ["Market-impact digest"]
         if headlines:
             sections.append("Headlines:\n" + "\n".join(f"- {line}" for line in headlines[:8]))
         if market_lines:

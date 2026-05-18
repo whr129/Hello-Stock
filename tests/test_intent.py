@@ -1,6 +1,6 @@
 import pytest
 
-from news_agent.agent.intent import IntentClassifier, ROUTER_SYSTEM_PROMPT
+from news_agent.agent.intent import ROUTER_SYSTEM_PROMPT, IntentClassifier
 from news_agent.settings import Settings
 
 
@@ -41,11 +41,22 @@ class FakeClient:
 async def test_intent_classifier_uses_command_without_llm() -> None:
     classifier = IntentClassifier(Settings(openai_api_key=""))
 
+    command, args, intent = await classifier.classify("/stocks AAPL")
+
+    assert command == "/stocks"
+    assert args == ["AAPL"]
+    assert intent == "stocks"
+
+
+@pytest.mark.asyncio
+async def test_intent_classifier_removed_command_is_unknown() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key=""))
+
     command, args, intent = await classifier.classify("/watch AAPL")
 
     assert command == "/watch"
     assert args == ["AAPL"]
-    assert intent == "watch"
+    assert intent == "unknown"
 
 
 @pytest.mark.asyncio
@@ -70,25 +81,25 @@ async def test_intent_classifier_uses_llm_router_for_company_ticker() -> None:
 
 
 @pytest.mark.asyncio
-async def test_intent_classifier_uses_llm_router_for_market_news() -> None:
+async def test_intent_classifier_uses_llm_router_for_market_research() -> None:
     classifier = IntentClassifier(Settings(openai_api_key="test"))
-    classifier.client = FakeClient('{"intent": "brief", "args": []}')
+    classifier.client = FakeClient('{"intent": "research", "args": []}')
 
     _, args, intent = await classifier.classify("what happened to the stock market today")
 
     assert args == []
-    assert intent == "brief"
+    assert intent == "research"
 
 
 @pytest.mark.asyncio
-async def test_intent_classifier_uses_llm_router_for_mixed_request() -> None:
+async def test_intent_classifier_uses_llm_router_for_market_impact_request() -> None:
     classifier = IntentClassifier(Settings(openai_api_key="test"))
-    classifier.client = FakeClient('{"intent": "brief", "args": ["NVDA"]}')
+    classifier.client = FakeClient('{"intent": "research", "args": ["NVDA"]}')
 
-    _, args, intent = await classifier.classify("brief me on nvidia and today's ai news")
+    _, args, intent = await classifier.classify("research nvidia and today's ai news")
 
     assert args == ["NVDA"]
-    assert intent == "brief"
+    assert intent == "research"
 
 
 @pytest.mark.asyncio
@@ -103,5 +114,6 @@ async def test_intent_classifier_uses_llm_router_for_runtime_request() -> None:
 
 
 def test_router_prompt_mentions_supported_outputs() -> None:
-    assert '"intent": "brief" | "stocks" | "runtime" | "general_chat" | "help"' in ROUTER_SYSTEM_PROMPT
+    assert '"intent": "stocks" | "runtime" | "research"' in ROUTER_SYSTEM_PROMPT
+    assert '"signals" | "general_chat" | "help"' in ROUTER_SYSTEM_PROMPT
     assert "Return only valid JSON" in ROUTER_SYSTEM_PROMPT
