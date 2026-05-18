@@ -1,13 +1,12 @@
 from typing import Any
 
 
-def build_brief_response(
+def build_market_research_digest(
     articles: list[dict[str, Any]],
     summaries: list[str],
     market_context: list[dict[str, Any]],
-    local_region: str,
 ) -> str:
-    lines = [f"News brief for global, local ({local_region}), and market context:"]
+    lines = ["Market-impact research digest:"]
 
     if articles:
         lines.append("\nTop headlines:")
@@ -15,14 +14,17 @@ def build_brief_response(
             source = article.get("source") or "unknown source"
             lines.append(f"- {article.get('title', 'Untitled')} (source: {source})")
     else:
-        lines.append("\nNo fresh articles are stored yet. Run the scheduler after adding sources.")
+        lines.append(
+            "\nNo fresh market-impact articles are stored yet. "
+            "Run /refresh after adding sources."
+        )
 
     if summaries:
         lines.append("\nRecent summaries:")
         lines.extend(f"- {summary}" for summary in summaries[:3])
 
     if market_context:
-        lines.append("\nWatched stocks:")
+        lines.append("\nMarket snapshots:")
         for item in market_context[:5]:
             change = item.get("percent_change")
             change_text = f"{change:.2f}%" if isinstance(change, (int, float)) else "n/a"
@@ -33,9 +35,9 @@ def build_brief_response(
 
 def build_stocks_response(tickers: list[str], market_context: list[dict[str, Any]]) -> str:
     if not tickers:
-        return "You are not watching any tickers yet. Use /watch AAPL TSLA to add some."
+        return "Use /stocks <ticker...>, for example /stocks AAPL TSLA."
 
-    lines = ["Watched stock context:"]
+    lines = ["Stock context:"]
     snapshot_by_symbol = {item.get("symbol"): item for item in market_context}
     for ticker in tickers:
         snapshot = snapshot_by_symbol.get(ticker)

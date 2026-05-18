@@ -1,7 +1,10 @@
 from typing import Any, TypedDict
 
-from news_agent.app.state import Intent, SupervisorState as NewsAgentState
+from news_agent.app.state import Intent as AppIntent
+from news_agent.app.state import SupervisorState
 
+Intent = AppIntent
+NewsAgentState = SupervisorState
 Subagent = str
 ToolName = str
 

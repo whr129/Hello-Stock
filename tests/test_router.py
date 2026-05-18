@@ -2,14 +2,14 @@ from news_agent.agent.router import parse_message, route_intent, route_request
 
 
 def test_parse_command_intent() -> None:
-    command, args, intent = parse_message("/watch AAPL tsla")
+    command, args, intent = parse_message("/stocks AAPL tsla")
 
-    assert command == "/watch"
+    assert command == "/stocks"
     assert args == ["AAPL", "tsla"]
-    assert intent == "watch"
+    assert intent == "stocks"
 
 
-def test_parse_broad_stock_market_question_as_brief() -> None:
+def test_parse_broad_stock_market_question_defers_to_router() -> None:
     _, _, intent = parse_message("what happened to the stock market today")
 
     assert intent == "general_chat"
@@ -68,11 +68,11 @@ def test_parse_runtime_command() -> None:
     assert intent == "runtime"
 
 
-def test_route_brief_to_news_subagent() -> None:
-    route = route_intent("brief")
-
-    assert route.agents == ("news",)
-    assert route.capabilities == ("news_brief",)
+def test_parse_research_commands() -> None:
+    assert parse_message("/research")[2] == "research"
+    assert parse_message("/candidates")[2] == "candidates"
+    assert parse_message("/signals MU")[2] == "signals"
+    assert parse_message("/researchstatus")[2] == "researchstatus"
 
 
 def test_route_stocks_to_stock_tool_without_news_context() -> None:
@@ -82,11 +82,19 @@ def test_route_stocks_to_stock_tool_without_news_context() -> None:
     assert route.capabilities == ("market_snapshot", "technical_analysis")
 
 
-def test_route_mixed_news_and_stock_request_to_both_subagents() -> None:
-    route = route_request("brief", args=["NVDA"])
+def test_route_research_to_research_agent_for_market_news() -> None:
+    route = route_request("research", args=["NVDA"])
 
-    assert route.agents == ("news", "market")
-    assert route.capabilities == ("news_brief", "market_snapshot", "technical_analysis")
+    assert route.agents == ("research",)
+    assert route.capabilities == ("market_research",)
+
+
+def test_removed_commands_route_unknown() -> None:
+    command, args, intent = parse_message("/brief")
+
+    assert command == "/brief"
+    assert args == []
+    assert intent == "unknown"
 
 
 def test_route_general_chat_to_general_search() -> None:
@@ -109,6 +117,13 @@ def test_route_runtime_to_runtime_agent() -> None:
 
     assert route.agents == ("runtime",)
     assert route.capabilities == ("runtime_inspection",)
+
+
+def test_route_research_to_research_agent() -> None:
+    route = route_request("candidates")
+
+    assert route.agents == ("research",)
+    assert route.capabilities == ("market_research",)
 
 
 def test_route_runtime_like_general_chat_to_runtime_agent() -> None:

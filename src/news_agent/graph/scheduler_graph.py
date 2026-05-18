@@ -14,8 +14,17 @@ def build_scheduler_graph(session_factory: async_sessionmaker, settings: Setting
     graph.add_node("fetch_parallel", nodes.traced("fetch_parallel", nodes.fetch_parallel))
     graph.add_node("normalize_dedupe", nodes.traced("normalize_dedupe", nodes.normalize_dedupe))
     graph.add_node("embed_store", nodes.traced("embed_store", nodes.embed_store))
-    graph.add_node("precompute_summaries", nodes.traced("precompute_summaries", nodes.precompute_summaries))
+    graph.add_node(
+        "precompute_summaries",
+        nodes.traced("precompute_summaries", nodes.precompute_summaries),
+    )
+    graph.add_node("extract_mentions", nodes.traced("extract_mentions", nodes.extract_mentions))
+    graph.add_node("score_signals", nodes.traced("score_signals", nodes.score_signals))
     graph.add_node("quality_check", nodes.traced("quality_check", nodes.quality_check))
+    graph.add_node(
+        "cleanup_market_research",
+        nodes.traced("cleanup_market_research", nodes.cleanup_market_research),
+    )
     graph.add_node("retry_or_recover", nodes.traced("retry_or_recover", nodes.retry_or_recover))
 
     graph.set_entry_point("load_due_sources")
@@ -23,8 +32,11 @@ def build_scheduler_graph(session_factory: async_sessionmaker, settings: Setting
     graph.add_edge("fetch_parallel", "normalize_dedupe")
     graph.add_edge("normalize_dedupe", "embed_store")
     graph.add_edge("embed_store", "precompute_summaries")
-    graph.add_edge("precompute_summaries", "quality_check")
-    graph.add_edge("quality_check", "retry_or_recover")
+    graph.add_edge("precompute_summaries", "extract_mentions")
+    graph.add_edge("extract_mentions", "score_signals")
+    graph.add_edge("score_signals", "quality_check")
+    graph.add_edge("quality_check", "cleanup_market_research")
+    graph.add_edge("cleanup_market_research", "retry_or_recover")
     graph.add_edge("retry_or_recover", END)
 
     return graph.compile()

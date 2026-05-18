@@ -52,15 +52,17 @@ class ReActResponder:
 
     def _observe(self, action: str, context: dict[str, Any]) -> str:
         if action == "explain_capabilities":
-            return "The bot supports news briefs, stock context, source config, topics, and memory."
+            return (
+                "The bot supports market research, stock context, source config, "
+                "runtime inspection, and memory."
+            )
         if action == "memory_note":
             return "The message may contain a preference that the memory node can store."
         if action == "greet":
             return "The user is opening a casual conversation."
 
         article_count = len(context.get("articles", []))
-        ticker_count = len(context.get("tickers", []))
-        return f"Available context: {article_count} articles and {ticker_count} watched tickers."
+        return f"Available context: {article_count} market-impact articles."
 
     async def _llm_answer(
         self,
@@ -74,7 +76,6 @@ class ReActResponder:
             f"- {item.get('role')}: {item.get('content')}"
             for item in context.get("recent_messages", [])[-8:]
         )
-        tickers = ", ".join(context.get("tickers", [])) or "none"
         articles = "\n".join(
             f"- {article.get('title', 'Untitled')}" for article in context.get("articles", [])[:5]
         )
@@ -84,7 +85,7 @@ class ReActResponder:
                 {
                     "role": "system",
                     "content": (
-                        "You are a friendly Telegram news and market assistant. "
+                        "You are a concise Telegram market research assistant. "
                         "Use ReAct internally, but never reveal hidden reasoning, "
                         "or labels like Thought/Action/Observation. If discussing stocks, avoid "
                         "buy/sell recommendations and keep it informational."
@@ -96,7 +97,6 @@ class ReActResponder:
                         f"User message: {message}\n"
                         f"Chosen action: {action}\n"
                         f"Observation: {observation}\n"
-                        f"Watched tickers: {tickers}\n"
                         f"Recent conversation:\n{recent_messages or '- none'}\n"
                         f"Relevant memories:\n{memories or '- none'}\n"
                         f"Recent articles:\n{articles or '- none'}"
@@ -116,25 +116,21 @@ class ReActResponder:
     ) -> str:
         if action == "greet":
             return (
-                "Hi! I can help you follow world, local, and stock-market news. "
-                "Try /brief, /stocks, /watch AAPL TSLA, /topics economy AI, or /sources."
+                "Hi. I can help with market-impact research, stock context, source management, "
+                "runtime inspection, and memory. Try /research, /candidates, /signals MU, "
+                "/stocks AAPL, or /sources."
             )
         if action == "explain_capabilities":
             return (
-                "I can collect RSS news, summarize headlines, track watched tickers, show basic "
-                "technical-analysis context, and remember your preferences. Useful commands: "
-                "/brief, /stocks, /watch, /topics, /local, /addsource, /memory."
+                "I can collect market-impact sources, rank emerging ticker signals, explain "
+                "candidate evidence, show stock context, inspect runtime history, and "
+                "manage memory. "
+                "Useful commands: /research, /candidates, /signals, /stocks, /sources, /memory."
             )
         if action == "memory_note":
             return "Got it. I will treat that as a preference where appropriate."
 
-        tickers = context.get("tickers", [])
-        if tickers:
-            return (
-                f"I’m here. I’m currently tracking these tickers: {', '.join(tickers)}. "
-                "Ask for /brief or /stocks when you want the latest structured update."
-            )
         return (
-            "I’m here. Ask me for a news brief, stock context, or tell me what topics and sources "
-            "you care about."
+            "I’m here. Ask for market research, candidate signals, stock context, "
+            "or source management."
         )

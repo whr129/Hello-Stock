@@ -31,18 +31,52 @@ class Settings(BaseSettings):
     rss_fetch_timeout_seconds: int = Field(default=15, alias="RSS_FETCH_TIMEOUT_SECONDS")
     market_fetch_timeout_seconds: int = Field(default=20, alias="MARKET_FETCH_TIMEOUT_SECONDS")
     llm_timeout_seconds: int = Field(default=30, alias="LLM_TIMEOUT_SECONDS")
-    default_local_region: str = Field(default="Waterloo", alias="DEFAULT_LOCAL_REGION")
     scheduler_tick_seconds: int = Field(default=60, alias="SCHEDULER_TICK_SECONDS")
     news_freshness_hours: int = Field(default=24, alias="NEWS_FRESHNESS_HOURS")
     summary_freshness_hours: int = Field(default=24, alias="SUMMARY_FRESHNESS_HOURS")
     snapshot_freshness_minutes: int = Field(default=15, alias="SNAPSHOT_FRESHNESS_MINUTES")
     article_retention_days: int = Field(default=30, alias="ARTICLE_RETENTION_DAYS")
-    snapshot_retention_days: int = Field(default=7, alias="SNAPSHOT_RETENTION_DAYS")
+    snapshot_retention_days: int = Field(default=30, alias="SNAPSHOT_RETENTION_DAYS")
+    market_universe_symbols: str = Field(
+        default="SPY,QQQ,DIA,IWM,AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AVGO,JPM,V,LLY,UNH,XOM",
+        alias="MARKET_UNIVERSE_SYMBOLS",
+    )
+    signal_retention_days: int = Field(default=30, alias="SIGNAL_RETENTION_DAYS")
+    signal_alert_threshold: float = Field(default=75.0, alias="SIGNAL_ALERT_THRESHOLD")
+    signal_alert_cooldown_minutes: int = Field(
+        default=360, alias="SIGNAL_ALERT_COOLDOWN_MINUTES"
+    )
+    signal_weight_mention_velocity: float = Field(
+        default=1.0, alias="SIGNAL_WEIGHT_MENTION_VELOCITY"
+    )
+    signal_weight_source_diversity: float = Field(
+        default=1.0, alias="SIGNAL_WEIGHT_SOURCE_DIVERSITY"
+    )
+    signal_weight_recency: float = Field(default=1.0, alias="SIGNAL_WEIGHT_RECENCY")
+    signal_weight_semantic_similarity: float = Field(
+        default=1.0, alias="SIGNAL_WEIGHT_SEMANTIC_SIMILARITY"
+    )
+    signal_weight_price_momentum: float = Field(
+        default=1.0, alias="SIGNAL_WEIGHT_PRICE_MOMENTUM"
+    )
+    signal_weight_volume: float = Field(default=1.0, alias="SIGNAL_WEIGHT_VOLUME")
+    signal_weight_theme_persistence: float = Field(
+        default=1.0, alias="SIGNAL_WEIGHT_THEME_PERSISTENCE"
+    )
+    signal_weight_trust: float = Field(default=1.0, alias="SIGNAL_WEIGHT_TRUST")
+    social_signals_enabled: bool = Field(default=False, alias="SOCIAL_SIGNALS_ENABLED")
+    llm_mention_extraction_enabled: bool = Field(
+        default=False, alias="LLM_MENTION_EXTRACTION_ENABLED"
+    )
     job_run_retention_days: int = Field(default=30, alias="JOB_RUN_RETENTION_DAYS")
     short_term_memory_window_size: int = Field(default=20, alias="SHORT_TERM_MEMORY_WINDOW_SIZE")
     short_term_memory_expiry_minutes: int = Field(
-        default=60,
+        default=43200,
         alias="SHORT_TERM_MEMORY_EXPIRY_MINUTES",
+    )
+    conversation_event_retention_days: int = Field(
+        default=30,
+        alias="CONVERSATION_EVENT_RETENTION_DAYS",
     )
     long_term_memory_batch_size: int = Field(default=20, alias="LONG_TERM_MEMORY_BATCH_SIZE")
     long_term_memory_top_k: int = Field(default=5, alias="LONG_TERM_MEMORY_TOP_K")

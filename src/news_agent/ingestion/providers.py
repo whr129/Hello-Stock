@@ -27,10 +27,20 @@ class IngestProvider(Protocol):
 
 class RSSIngestProvider:
     def fetch_items(self, source: Source, timeout_seconds: int) -> list[NormalizedIngestItem]:
-        feed_url = str((source.config or {}).get("feed_url") or source.external_account or source.url)
+        feed_url = str(
+            (source.config or {}).get("feed_url") or source.external_account or source.url
+        )
         articles = parse_feed(feed_url, timeout_seconds=timeout_seconds)
         return [
-            _map_feed_article(source, article.raw_payload, article.url, article.title, article.summary, article.published_at, article.author)
+            _map_feed_article(
+                source,
+                article.raw_payload,
+                article.url,
+                article.title,
+                article.summary,
+                article.published_at,
+                article.author,
+            )
             for article in articles
         ]
 
@@ -49,7 +59,15 @@ class AccountFeedProvider:
             )
         articles = parse_feed(feed_url, timeout_seconds=timeout_seconds)
         return [
-            _map_feed_article(source, article.raw_payload, article.url, article.title, article.summary, article.published_at, article.author)
+            _map_feed_article(
+                source,
+                article.raw_payload,
+                article.url,
+                article.title,
+                article.summary,
+                article.published_at,
+                article.author,
+            )
             for article in articles
         ]
 

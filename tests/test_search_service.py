@@ -38,7 +38,7 @@ async def test_general_search_service_formats_answer_with_sources() -> None:
     service = GeneralSearchService(Settings(openai_api_key="test"))
     service.client = FakeClient()
 
-    result = await service.search("latest ai news", {"timezone": "America/Toronto"})
+    result = await service.search("latest ai news", {})
 
     assert result.metadata["status"] == "ok"
     assert "Sources:" in result.answer
@@ -57,8 +57,6 @@ async def test_general_search_service_includes_trusted_user_context() -> None:
     await service.search(
         "what is my name?",
         {
-            "local_region": "toronto",
-            "timezone": "America/Toronto",
             "long_term_memory": ["User prefers English replies."],
             "short_term_memory": {
                 "messages": [
@@ -71,7 +69,7 @@ async def test_general_search_service_includes_trusted_user_context() -> None:
 
     request_input = fake_client.responses.kwargs["input"]
     assert "Trusted bot context:" in request_input
-    assert "Local region: toronto" in request_input
+    assert "Local region: toronto" not in request_input
     assert "User prefers English replies." in request_input
     assert "ok call me Howard" in request_input
     assert "User question:\nwhat is my name?" in request_input

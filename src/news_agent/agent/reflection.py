@@ -24,7 +24,7 @@ Return only valid JSON with this exact schema:
 {
   "verdict": "pass" | "retry" | "fail",
   "reason": "short internal reason",
-  "corrected_intent": "brief|stocks|runtime|general_chat|help|null",
+  "corrected_intent": "stocks|runtime|research|candidates|signals|general_chat|help|null",
   "corrected_args": ["STRING", "..."]
 }
 
@@ -39,14 +39,23 @@ Rules:
   corrected_intent should usually be "stocks".
 - If the user asks about runtime history, traces, jobs, alerts, refresh failures, or debugging,
   corrected_intent should usually be "runtime".
-- If the user asks for a news brief, headlines, current news, company news, or market news,
-  corrected_intent should usually be "brief".
+- If the user asks for market-moving news, company-impact research, macro,
+  policy/regulatory, or candidate/signal analysis, corrected_intent should
+  usually be "research", "candidates", or "signals".
 - If the user asks a broad factual/general current-events question, corrected_intent should usually
   be "general_chat".
 - corrected_args should include ticker symbols only when relevant.
 """.strip()
 
-RETRYABLE_INTENTS: set[str] = {"brief", "stocks", "runtime", "general_chat", "help"}
+RETRYABLE_INTENTS: set[str] = {
+    "stocks",
+    "runtime",
+    "research",
+    "candidates",
+    "signals",
+    "general_chat",
+    "help",
+}
 
 
 @dataclass(frozen=True)

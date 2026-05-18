@@ -10,13 +10,14 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
 
@@ -35,40 +36,11 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
-    timezone: Mapped[str] = mapped_column(String(64), default="America/Toronto")
-    local_region: Mapped[str] = mapped_column(String(128), default="Waterloo")
     memory_cursor_event_id: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
-
-    preferences: Mapped["Preference"] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
-    tickers: Mapped[list["WatchedTicker"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
-
-
-class Preference(Base):
-    __tablename__ = "preferences"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
-    topics: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
-    blocked_keywords: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
-    preferred_categories: Mapped[list[str]] = mapped_column(
-        ARRAY(String), default=lambda: ["world", "local", "markets"]
-    )
-    digest_style: Mapped[str] = mapped_column(String(64), default="concise")
-    delivery_time: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    last_daily_recap_sent_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    risk_context: Mapped[str] = mapped_column(String(64), default="informational")
-
-    user: Mapped[User] = relationship(back_populates="preferences")
 
 
 class Source(Base):
@@ -90,18 +62,6 @@ class Source(Base):
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class WatchedTicker(Base):
-    __tablename__ = "watched_tickers"
-    __table_args__ = (UniqueConstraint("user_id", "symbol", name="uq_user_ticker"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    symbol: Mapped[str] = mapped_column(String(16), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    user: Mapped[User] = relationship(back_populates="tickers")
 
 
 class Article(Base):
@@ -166,6 +126,100 @@ class MarketSnapshot(Base):
     indicators: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class MarketEntity(Base):
+    __tablename__ = "market_entities"
+    __table_args__ = (
+        UniqueConstraint("ticker", name="uq_market_entities_ticker"),
+        Index("ix_market_entities_sector", "sector"),
+        Index("ix_market_entities_active", "active"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sector: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    industry: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    aliases: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    exchange: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class MarketMention(Base):
+    __tablename__ = "market_mentions"
+    __table_args__ = (
+        UniqueConstraint("article_id", "ticker", "theme", name="uq_market_mentions_article_signal"),
+        Index("ix_market_mentions_ticker_theme", "ticker", "theme"),
+        Index("ix_market_mentions_source_family", "source_family"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity_id: Mapped[int | None] = mapped_column(ForeignKey("market_entities.id"), nullable=True)
+    ticker: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    theme: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_family: Mapped[str] = mapped_column(String(64), default="news")
+    source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id"), nullable=True)
+    article_id: Mapped[int | None] = mapped_column(ForeignKey("articles.id"), nullable=True)
+    summary_id: Mapped[int | None] = mapped_column(ForeignKey("summaries.id"), nullable=True)
+    mention_count: Mapped[int] = mapped_column(Integer, default=1)
+    sentiment: Mapped[float | None] = mapped_column(Float, nullable=True)
+    novelty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trust_score: Mapped[float] = mapped_column(Float, default=0.5)
+    evidence_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class MarketSignalSnapshot(Base):
+    __tablename__ = "market_signal_snapshots"
+    __table_args__ = (
+        Index("ix_market_signal_snapshots_ticker_theme_created", "ticker", "theme", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    theme: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    window: Mapped[str] = mapped_column(String(16), index=True)
+    mention_velocity: Mapped[float] = mapped_column(Float, default=0.0)
+    source_diversity: Mapped[float] = mapped_column(Float, default=0.0)
+    recency_score: Mapped[float] = mapped_column(Float, default=0.0)
+    semantic_similarity: Mapped[float] = mapped_column(Float, default=0.0)
+    price_momentum: Mapped[float] = mapped_column(Float, default=0.0)
+    volume_signal: Mapped[float] = mapped_column(Float, default=0.0)
+    theme_persistence: Mapped[float] = mapped_column(Float, default=0.0)
+    trust_score: Mapped[float] = mapped_column(Float, default=0.0)
+    total_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    component_scores: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class MarketThemeMemory(Base):
+    __tablename__ = "market_theme_memories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    theme: Mapped[str] = mapped_column(String(128), index=True)
+    summary: Mapped[str] = mapped_column(Text)
+    related_tickers: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    related_sectors: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0)
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -285,7 +339,10 @@ class RuntimeStep(Base):
     __tablename__ = "runtime_steps"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    run_id: Mapped[int] = mapped_column(ForeignKey("runtime_runs.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("runtime_runs.id", ondelete="CASCADE"),
+        index=True,
+    )
     parent_step_id: Mapped[int | None] = mapped_column(
         ForeignKey("runtime_steps.id", ondelete="CASCADE"), nullable=True
     )
@@ -304,7 +361,10 @@ class RuntimeError(Base):
     __tablename__ = "runtime_errors"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    run_id: Mapped[int] = mapped_column(ForeignKey("runtime_runs.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("runtime_runs.id", ondelete="CASCADE"),
+        index=True,
+    )
     step_id: Mapped[int | None] = mapped_column(
         ForeignKey("runtime_steps.id", ondelete="SET NULL"), nullable=True
     )
@@ -319,7 +379,10 @@ class RuntimeAlert(Base):
     __tablename__ = "runtime_alerts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    run_id: Mapped[int] = mapped_column(ForeignKey("runtime_runs.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("runtime_runs.id", ondelete="CASCADE"),
+        index=True,
+    )
     error_id: Mapped[int | None] = mapped_column(
         ForeignKey("runtime_errors.id", ondelete="SET NULL"), nullable=True
     )

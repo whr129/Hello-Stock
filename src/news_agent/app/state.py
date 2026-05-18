@@ -4,12 +4,7 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
 Intent = Literal[
-    "brief",
     "stocks",
-    "watch",
-    "unwatch",
-    "topics",
-    "local",
     "sources",
     "addsource",
     "removesource",
@@ -20,28 +15,24 @@ Intent = Literal[
     "memory",
     "forget",
     "resetmemory",
-    "timezone",
-    "recaptime",
-    "recapoff",
-    "recapstatus",
     "runtime",
     "job",
     "trace",
     "step",
     "alerts",
+    "research",
+    "candidates",
+    "signals",
+    "researchstatus",
     "skills",
     "help",
     "general_chat",
     "unknown",
 ]
 
-AgentName = Literal["news", "market", "runtime"]
+AgentName = Literal["news", "market", "runtime", "research"]
 Capability = Literal[
-    "news_brief",
     "source_admin",
-    "topic_preferences",
-    "local_preferences",
-    "recap_admin",
     "scheduler_admin",
     "memory_admin",
     "runtime_inspection",
@@ -50,8 +41,8 @@ Capability = Literal[
     "help",
     "market_snapshot",
     "technical_analysis",
-    "watchlist_admin",
     "general_search",
+    "market_research",
 ]
 
 
@@ -63,10 +54,6 @@ class RouteState(TypedDict, total=False):
 
 class UserContext(TypedDict, total=False):
     user_id: int
-    local_region: str
-    timezone: str
-    topics: list[str]
-    watched_tickers: list[str]
     short_term_memory: dict[str, Any]
     long_term_memory: list[str]
 
@@ -84,7 +71,6 @@ class SupervisorState(TypedDict, total=False):
     args: list[str]
     intent: Intent
     requested_symbols: list[str]
-    requested_topics: list[str]
     route: RouteState
     pending_agents: list[AgentName]
     completed_agents: list[AgentName]
@@ -93,6 +79,7 @@ class SupervisorState(TypedDict, total=False):
     news_result: AgentResult
     market_result: AgentResult
     runtime_result: AgentResult
+    research_result: AgentResult
     search_result: AgentResult
     runtime_run_id: int
     active_step_id: int

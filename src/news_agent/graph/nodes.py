@@ -1,12 +1,12 @@
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from news_agent.agent.chains import build_brief_response, build_stocks_response
+from news_agent.agent.chains import build_market_research_digest, build_stocks_response
 from news_agent.agent.guardrails import enforce_financial_guardrails
 from news_agent.agent.intent import IntentClassifier
 from news_agent.agent.ranking import rank_articles
@@ -24,19 +24,24 @@ from news_agent.observability.runtime import (
     RuntimeTraceService,
     summarize_run_state,
 )
+from news_agent.research.scheduler import (
+    extract_market_mentions,
+    prune_market_research_data,
+    score_market_signals,
+)
 from news_agent.settings import Settings
 from news_agent.storage.models import JobRun, Source
 from news_agent.storage.repositories import (
     ArticleRepository,
     EmbeddingRepository,
     JobRepository,
+    MarketEntityRepository,
+    MarketMentionRepository,
     MarketRepository,
     MemoryRepository,
-    PreferenceRepository,
     ShortTermSessionRepository,
     SourceRepository,
     SummaryRepository,
-    TickerRepository,
     UserRepository,
 )
 from news_agent.storage.retrieval import RetrievalService
@@ -93,25 +98,18 @@ class GraphNodes:
             user = await UserRepository(session, self.settings).get_or_create_user(
                 state["telegram_user_id"]
             )
-            preference = await PreferenceRepository(session).get_for_user(user.id)
-            tickers = await TickerRepository(session).list_for_user(user.id)
             memories = await MemoryRepository(session).list_for_user(user.id)
             short_term_state = await ShortTermSessionRepository(session).get_state(state["chat_id"])
             await session.commit()
 
         logger.info(
-            "chat loaded user state user_id=%s topics=%s tickers=%s short_term_messages=%s",
+            "chat loaded user state user_id=%s short_term_messages=%s",
             user.id,
-            len(preference.topics),
-            len(tickers),
             len(short_term_state.get("messages", [])),
         )
         return {
             **state,
             "user_id": user.id,
-            "local_region": user.local_region,
-            "topics": preference.topics,
-            "watched_tickers": tickers,
             "short_term_memory": short_term_state,
             "long_term_memory": [memory.memory_text for memory in memories],
         }
@@ -152,35 +150,6 @@ class GraphNodes:
         user_id = state["user_id"]
 
         async with self.session_factory() as session:
-            if intent == "watch":
-                added = await TickerRepository(session).add_many(user_id, args)
-                await session.commit()
-                response = f"Now watching: {', '.join(added) or 'no new tickers'}"
-                return {**state, "response": response}
-
-            if intent == "unwatch":
-                removed = await TickerRepository(session).remove_many(user_id, args)
-                await session.commit()
-                return {**state, "response": f"Removed: {', '.join(removed) or 'none'}"}
-
-            if intent == "topics":
-                preference = await PreferenceRepository(session).set_topics(user_id, args)
-                await session.commit()
-                response = f"Topics updated: {', '.join(preference.topics)}"
-                return {**state, "topics": preference.topics, "response": response}
-
-            if intent == "local" and args:
-                local_region = " ".join(args)
-                user = await UserRepository(session, self.settings).set_local_region(
-                    user_id, local_region
-                )
-                await session.commit()
-                return {
-                    **state,
-                    "local_region": user.local_region if user else local_region,
-                    "response": f"Local region updated: {local_region}",
-                }
-
             if intent == "addsource" and args:
                 url = args[0]
                 source = await SourceRepository(session).add_source(
@@ -265,8 +234,8 @@ class GraphNodes:
         async with self.session_factory() as session:
             context = await RetrievalService(session).retrieve_for_brief(
                 user_id=state["user_id"],
-                topics=state.get("topics", []),
-                tickers=state.get("watched_tickers", []),
+                topics=[],
+                tickers=state.get("requested_symbols", []),
             )
 
         articles: list[dict[str, Any]] = [
@@ -298,9 +267,9 @@ class GraphNodes:
     async def rank_context(self, state: NewsAgentState) -> NewsAgentState:
         ranked = rank_articles(
             state.get("retrieved_articles", []),
-            state.get("topics", []),
-            state.get("watched_tickers", []),
-            state.get("local_region"),
+            [],
+            state.get("requested_symbols", []),
+            None,
         )
         return {**state, "retrieved_articles": ranked}
 
@@ -309,12 +278,11 @@ class GraphNodes:
             return state
 
         tool_name = state.get("tool_name")
-        if tool_name == "news_brief":
-            response = build_brief_response(
+        if tool_name == "market_research":
+            response = build_market_research_digest(
                 state.get("retrieved_articles", []),
                 state.get("retrieved_summaries", []),
                 state.get("market_context", []),
-                state.get("local_region", self.settings.default_local_region),
             )
             return {**state, "response": response}
 
@@ -327,8 +295,6 @@ class GraphNodes:
                     "market_context": state.get("market_context", []),
                     "memories": state.get("long_term_memory", []),
                     "recent_messages": state.get("short_term_memory", {}).get("messages", []),
-                    "tickers": state.get("watched_tickers", []),
-                    "local_region": state.get("local_region"),
                 },
             )
             metadata = {
@@ -340,7 +306,9 @@ class GraphNodes:
 
         return {
             **state,
-            "response": "I can help with news briefs, stock context, sources, topics, and memory.",
+            "response": (
+                "I can help with market research, stock context, sources, runtime, and memory."
+            ),
         }
 
     async def generate_response(self, state: NewsAgentState) -> NewsAgentState:
@@ -351,15 +319,7 @@ class GraphNodes:
         if intent == "stocks":
             response_path = "stocks"
             response = build_stocks_response(
-                state.get("watched_tickers", []), state.get("market_context", [])
-            )
-        elif intent == "brief":
-            response_path = "brief"
-            response = build_brief_response(
-                state.get("retrieved_articles", []),
-                state.get("retrieved_summaries", []),
-                state.get("market_context", []),
-                state.get("local_region", self.settings.default_local_region),
+                state.get("requested_symbols", []), state.get("market_context", [])
             )
         elif intent in {"general_chat", "unknown"}:
             response_path = "react"
@@ -371,8 +331,6 @@ class GraphNodes:
                     "market_context": state.get("market_context", []),
                     "memories": state.get("long_term_memory", []),
                     "recent_messages": state.get("short_term_memory", {}).get("messages", []),
-                    "tickers": state.get("watched_tickers", []),
-                    "local_region": state.get("local_region"),
                 },
             )
             response = result.answer
@@ -400,12 +358,14 @@ class GraphNodes:
         elif intent == "help":
             response_path = "help"
             response = (
-                "Commands: /brief, /stocks, /watch, /unwatch, /topics, /local, "
-                "/addsource, /removesource, /sources, /memory, /resetmemory."
+                "Commands: /research, /candidates, /signals, /stocks, /refresh, "
+                "/sources, /addsource, /removesource, /memory, /resetmemory."
             )
         else:
             response_path = "fallback"
-            response = "I can help with news briefs, stock context, sources, topics, and memory."
+            response = (
+                "I can help with market research, stock context, sources, runtime, and memory."
+            )
 
         logger.info(
             "chat generated response path=%s intent=%s response_chars=%s",
@@ -527,7 +487,7 @@ class SchedulerNodes:
         return result
 
     async def load_due_sources(self, state: SchedulerState) -> SchedulerState:
-        job_type = state.get("job_type", "news_refresh")
+        job_type = state.get("job_type", "market_research_refresh")
         logger.info("scheduler loading due work", extra={"job_type": job_type})
         async with self.session_factory() as session:
             source_repo = SourceRepository(session)
@@ -535,7 +495,7 @@ class SchedulerNodes:
             if not sources:
                 logger.info("scheduler creating default sources")
                 sources = await source_repo.ensure_default_sources()
-            tickers = await TickerRepository(session).list_all_symbols()
+            tickers = await self._market_universe_symbols(session)
             job = await JobRepository(session).start(job_type)
             await session.commit()
 
@@ -570,6 +530,19 @@ class SchedulerNodes:
             "due_tickers": tickers,
             "errors": state.get("errors", []),
         }
+
+    async def _market_universe_symbols(self, session) -> list[str]:
+        configured = _parse_symbol_csv(self.settings.market_universe_symbols)
+        entities = [
+            entity.ticker
+            for entity in await MarketEntityRepository(session).list_active()
+            if entity.ticker
+        ]
+        mentioned = await MarketMentionRepository(session).top_tickers(
+            since=datetime.now(UTC) - timedelta(days=7),
+            limit=25,
+        )
+        return sorted(dict.fromkeys(configured + entities + mentioned))
 
     async def fetch_parallel(self, state: SchedulerState) -> SchedulerState:
         fetched_articles: list[dict[str, Any]] = []
@@ -773,6 +746,9 @@ class SchedulerNodes:
 
             for item in state.get("fetched_articles", []):
                 title = item["title"]
+                text = item.get("summary") or ""
+                if not _is_market_impact_article(title, text, item.get("category", "")):
+                    continue
                 related_tickers = [ticker for ticker in due_tickers if ticker in title.upper()]
                 article, created = await article_repo.upsert_article(
                     source_id=item["source_id"],
@@ -781,7 +757,7 @@ class SchedulerNodes:
                     published_at=item["published_at"],
                     content_hash=content_hash(title, item.get("summary"), item["url"]),
                     category=item["category"],
-                    extracted_text=item.get("summary"),
+                    extracted_text=text,
                     author=item.get("author"),
                     related_tickers=related_tickers,
                 )
@@ -856,6 +832,70 @@ class SchedulerNodes:
         )
         return state
 
+
+def _parse_symbol_csv(value: str) -> list[str]:
+    return [
+        item.strip().upper()
+        for item in value.split(",")
+        if item.strip() and item.strip().replace(".", "").isalpha()
+    ]
+
+
+MARKET_IMPACT_CATEGORIES = {
+    "business",
+    "companies",
+    "earnings",
+    "filings",
+    "finance",
+    "macro",
+    "markets",
+    "policy",
+    "regulatory",
+    "technology",
+    "tech",
+}
+MARKET_IMPACT_TERMS = {
+    "acquisition",
+    "antitrust",
+    "bank",
+    "bond",
+    "capex",
+    "company",
+    "cpi",
+    "earnings",
+    "economy",
+    "export control",
+    "fed",
+    "filing",
+    "forecast",
+    "guidance",
+    "inflation",
+    "ipo",
+    "market",
+    "merger",
+    "nasdaq",
+    "policy",
+    "profit",
+    "rates",
+    "regulation",
+    "revenue",
+    "sales",
+    "sanction",
+    "semiconductor",
+    "shares",
+    "stock",
+    "tariff",
+    "treasury",
+}
+
+
+def _is_market_impact_article(title: str, text: str, category: str) -> bool:
+    normalized_category = (category or "").strip().lower()
+    if normalized_category in MARKET_IMPACT_CATEGORIES:
+        return True
+    haystack = f"{title} {text}".lower()
+    return any(term in haystack for term in MARKET_IMPACT_TERMS)
+
     async def precompute_summaries(self, state: SchedulerState) -> SchedulerState:
         summaries: list[str] = []
         async with self.session_factory() as session:
@@ -912,6 +952,27 @@ class SchedulerNodes:
             },
         )
         return state
+
+    async def extract_mentions(self, state: SchedulerState) -> SchedulerState:
+        async with self.session_factory() as session:
+            count = await extract_market_mentions(session, limit=100)
+            await session.commit()
+        metadata = {**state.get("metadata", {}), "mention_count": count}
+        return {**state, "metadata": metadata}
+
+    async def score_signals(self, state: SchedulerState) -> SchedulerState:
+        async with self.session_factory() as session:
+            count = await score_market_signals(session, self.settings)
+            await session.commit()
+        metadata = {**state.get("metadata", {}), "signal_count": count}
+        return {**state, "metadata": metadata}
+
+    async def cleanup_market_research(self, state: SchedulerState) -> SchedulerState:
+        async with self.session_factory() as session:
+            count = await prune_market_research_data(session, self.settings)
+            await session.commit()
+        metadata = {**state.get("metadata", {}), "market_research_pruned_count": count}
+        return {**state, "metadata": metadata}
 
     async def retry_or_recover(self, state: SchedulerState) -> SchedulerState:
         job_id = state.get("job_id")
