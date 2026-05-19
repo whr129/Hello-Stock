@@ -1,24 +1,19 @@
 import asyncio
+import json
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from news_agent.agent.chains import build_market_research_digest, build_stocks_response
-from news_agent.agent.guardrails import enforce_financial_guardrails
-from news_agent.agent.intent import IntentClassifier
-from news_agent.agent.ranking import rank_articles
-from news_agent.agent.react import ReActResponder
-from news_agent.agent.router import route_intent
-from news_agent.agent.tools import ToolRegistry
-from news_agent.graph.state import NewsAgentState, SchedulerState
+from news_agent.graph.state import SchedulerState
 from news_agent.ingestion.dedupe import content_hash
+from news_agent.ingestion.market_impact import MarketImpactClassifier
 from news_agent.ingestion.providers import IngestProviderRegistry
 from news_agent.markets.yahoo import YahooMarketDataProvider
 from news_agent.memory.embeddings import EmbeddingService
-from news_agent.memory.short_term import append_message, expiry
 from news_agent.observability.runtime import (
     RuntimeAlertService,
     RuntimeTraceService,
@@ -38,13 +33,9 @@ from news_agent.storage.repositories import (
     MarketEntityRepository,
     MarketMentionRepository,
     MarketRepository,
-    MemoryRepository,
-    ShortTermSessionRepository,
     SourceRepository,
     SummaryRepository,
-    UserRepository,
 )
-from news_agent.storage.retrieval import RetrievalService
 from news_agent.summarizer.service import Summarizer, SummaryRequest
 
 logger = logging.getLogger(__name__)
@@ -67,318 +58,6 @@ def _source_dict_to_model(payload: dict[str, Any]) -> Source:
     )
 
 
-class GraphNodes:
-    def __init__(self, session_factory: async_sessionmaker, settings: Settings) -> None:
-        self.session_factory = session_factory
-        self.settings = settings
-        self.embedding_service = EmbeddingService(settings)
-        self.react_responder = ReActResponder(settings)
-        self.intent_classifier = IntentClassifier(settings)
-        self.market_provider = YahooMarketDataProvider()
-        self.tool_registry = ToolRegistry(
-            session_factory,
-            settings,
-            self.market_provider,
-            self.react_responder,
-        )
-
-    async def parse_intent(self, state: NewsAgentState) -> NewsAgentState:
-        message_text = state.get("message_text", "")
-        command, args, intent = await self.intent_classifier.classify(message_text)
-        logger.info(
-            "chat routed message intent=%s command=%s text=%s",
-            intent,
-            command or "-",
-            message_text[:200],
-        )
-        return {**state, "command": command, "args": args, "intent": intent}
-
-    async def load_user_state(self, state: NewsAgentState) -> NewsAgentState:
-        async with self.session_factory() as session:
-            user = await UserRepository(session, self.settings).get_or_create_user(
-                state["telegram_user_id"]
-            )
-            memories = await MemoryRepository(session).list_for_user(user.id)
-            short_term_state = await ShortTermSessionRepository(session).get_state(state["chat_id"])
-            await session.commit()
-
-        logger.info(
-            "chat loaded user state user_id=%s short_term_messages=%s",
-            user.id,
-            len(short_term_state.get("messages", [])),
-        )
-        return {
-            **state,
-            "user_id": user.id,
-            "short_term_memory": short_term_state,
-            "long_term_memory": [memory.memory_text for memory in memories],
-        }
-
-    async def route_request(self, state: NewsAgentState) -> NewsAgentState:
-        route = route_intent(state.get("intent", "unknown"))
-        logger.info(
-            "chat routed to subagent=%s tool=%s needs_context=%s",
-            route.subagent,
-            route.tool_name,
-            route.needs_context,
-        )
-        return {
-            **state,
-            "subagent": route.subagent,
-            "tool_name": route.tool_name,
-            "needs_context": route.needs_context,
-        }
-
-    async def apply_tool_or_skill(self, state: NewsAgentState) -> NewsAgentState:
-        result = await self.tool_registry.run(state["tool_name"], state)
-        next_state = {
-            **state,
-            **result.updates,
-            "tool_result": {
-                "subagent": state.get("subagent"),
-                "tool_name": state.get("tool_name"),
-                "has_response": result.response is not None,
-            },
-        }
-        if result.response is not None:
-            next_state["response"] = result.response
-        return next_state
-
-    async def apply_command(self, state: NewsAgentState) -> NewsAgentState:
-        intent = state.get("intent", "unknown")
-        args = state.get("args", [])
-        user_id = state["user_id"]
-
-        async with self.session_factory() as session:
-            if intent == "addsource" and args:
-                url = args[0]
-                source = await SourceRepository(session).add_source(
-                    name=url.split("//")[-1].split("/")[0],
-                    url=url,
-                    owner_user_id=user_id,
-                )
-                await session.commit()
-                return {**state, "response": f"Added source {source.name}: {source.url}"}
-
-            if intent == "removesource" and args:
-                try:
-                    source_id = int(args[0])
-                except ValueError:
-                    return {**state, "response": "Usage: /removesource <source-id>"}
-
-                removed = await SourceRepository(session).disable_source(source_id, user_id)
-                await session.commit()
-                response = "Source removed." if removed else "Source not found or not removable."
-                return {**state, "response": response}
-
-            if intent == "memory":
-                memories = await MemoryRepository(session).list_for_user(user_id)
-                short_term_state = await ShortTermSessionRepository(session).get_state(
-                    state["chat_id"]
-                )
-                response_parts: list[str] = []
-                messages = short_term_state.get("messages", [])[-8:]
-                if messages:
-                    response_parts.append(
-                        "Recent session memory:\n"
-                        + "\n".join(
-                            f"- {item.get('role')}: {item.get('content')}" for item in messages
-                        )
-                    )
-                if memories:
-                    response_parts.append(
-                        "Long-term memory:\n"
-                        + "\n".join(
-                            f"- {memory.public_id}: {memory.memory_text}" for memory in memories
-                        )
-                    )
-                response = "\n\n".join(response_parts) or "No memory saved yet."
-                return {**state, "response": response}
-
-            if intent == "forget" and args:
-                removed = await MemoryRepository(session).forget(user_id, args[0])
-                await session.commit()
-                response = "Memory removed." if removed else "Memory not found."
-                return {**state, "response": response}
-
-            if intent == "resetmemory":
-                await MemoryRepository(session).reset_learned(user_id)
-                await session.commit()
-                return {**state, "response": "Learned memory has been reset."}
-
-        return state
-
-    async def persist_memory(self, state: NewsAgentState) -> NewsAgentState:
-        text = state.get("message_text", "")
-        short_term_state = dict(state.get("short_term_memory", {}))
-        append_message(short_term_state, "user", text)
-        if state.get("response"):
-            append_message(short_term_state, "assistant", state["response"])
-
-        async with self.session_factory() as session:
-            await ShortTermSessionRepository(session).save_state(
-                state["chat_id"],
-                short_term_state,
-                expiry(),
-            )
-            await session.commit()
-
-        logger.info(
-            "chat persisted memory chat_id=%s message_count=%s",
-            state["chat_id"],
-            len(short_term_state.get("messages", [])),
-        )
-        return {**state, "short_term_memory": short_term_state}
-
-    async def retrieve_context(self, state: NewsAgentState) -> NewsAgentState:
-        async with self.session_factory() as session:
-            context = await RetrievalService(session).retrieve_for_brief(
-                user_id=state["user_id"],
-                topics=[],
-                tickers=state.get("requested_symbols", []),
-            )
-
-        articles: list[dict[str, Any]] = [
-            {
-                "id": article.id,
-                "title": article.title,
-                "source": article.source_id,
-                "published_at": article.published_at,
-                "related_tickers": article.related_tickers,
-            }
-            for article in context.articles
-        ]
-
-        return {
-            **state,
-            "retrieved_articles": articles,
-            "retrieved_summaries": [summary.text for summary in context.summaries],
-            "market_context": [
-                {
-                    "symbol": snapshot.symbol,
-                    "price": snapshot.price,
-                    "percent_change": snapshot.percent_change,
-                    "indicators": snapshot.indicators,
-                }
-                for snapshot in context.market_snapshots
-            ],
-        }
-
-    async def rank_context(self, state: NewsAgentState) -> NewsAgentState:
-        ranked = rank_articles(
-            state.get("retrieved_articles", []),
-            [],
-            state.get("requested_symbols", []),
-            None,
-        )
-        return {**state, "retrieved_articles": ranked}
-
-    async def compose_response(self, state: NewsAgentState) -> NewsAgentState:
-        if state.get("response"):
-            return state
-
-        tool_name = state.get("tool_name")
-        if tool_name == "market_research":
-            response = build_market_research_digest(
-                state.get("retrieved_articles", []),
-                state.get("retrieved_summaries", []),
-                state.get("market_context", []),
-            )
-            return {**state, "response": response}
-
-        if tool_name == "general_chat":
-            result = await self.react_responder.respond(
-                state.get("message_text", ""),
-                {
-                    "articles": state.get("retrieved_articles", []),
-                    "summaries": state.get("retrieved_summaries", []),
-                    "market_context": state.get("market_context", []),
-                    "memories": state.get("long_term_memory", []),
-                    "recent_messages": state.get("short_term_memory", {}).get("messages", []),
-                },
-            )
-            metadata = {
-                **state.get("metadata", {}),
-                "react_action": result.action,
-                "react_observation": result.observation,
-            }
-            return {**state, "response": result.answer, "metadata": metadata}
-
-        return {
-            **state,
-            "response": (
-                "I can help with market research, stock context, sources, runtime, and memory."
-            ),
-        }
-
-    async def generate_response(self, state: NewsAgentState) -> NewsAgentState:
-        intent = state.get("intent", "unknown")
-        if state.get("response"):
-            return state
-
-        if intent == "stocks":
-            response_path = "stocks"
-            response = build_stocks_response(
-                state.get("requested_symbols", []), state.get("market_context", [])
-            )
-        elif intent in {"general_chat", "unknown"}:
-            response_path = "react"
-            result = await self.react_responder.respond(
-                state.get("message_text", ""),
-                {
-                    "articles": state.get("retrieved_articles", []),
-                    "summaries": state.get("retrieved_summaries", []),
-                    "market_context": state.get("market_context", []),
-                    "memories": state.get("long_term_memory", []),
-                    "recent_messages": state.get("short_term_memory", {}).get("messages", []),
-                },
-            )
-            response = result.answer
-            metadata = {
-                **state.get("metadata", {}),
-                "react_action": result.action,
-                "react_observation": result.observation,
-            }
-            state = {**state, "metadata": metadata}
-            logger.info(
-                "chat react response action=%s observation=%s",
-                result.action,
-                result.observation,
-            )
-        elif intent == "sources":
-            response_path = "sources"
-            async with self.session_factory() as session:
-                sources = await SourceRepository(session).list_enabled(state["user_id"])
-            if sources:
-                response = "Enabled sources:\n" + "\n".join(
-                    f"- {source.id}: {source.name} ({source.category})" for source in sources
-                )
-            else:
-                response = "No sources enabled yet. Use /addsource <rss-url> to add one."
-        elif intent == "help":
-            response_path = "help"
-            response = (
-                "Commands: /research, /candidates, /signals, /stocks, /refresh, "
-                "/sources, /addsource, /removesource, /memory, /resetmemory."
-            )
-        else:
-            response_path = "fallback"
-            response = (
-                "I can help with market research, stock context, sources, runtime, and memory."
-            )
-
-        logger.info(
-            "chat generated response path=%s intent=%s response_chars=%s",
-            response_path,
-            intent,
-            len(response),
-        )
-        return {**state, "response": response}
-
-    async def guardrail_check(self, state: NewsAgentState) -> NewsAgentState:
-        return {**state, "response": enforce_financial_guardrails(state.get("response", ""))}
-
-
 class SchedulerNodes:
     def __init__(self, session_factory: async_sessionmaker, settings: Settings) -> None:
         self.session_factory = session_factory
@@ -387,6 +66,7 @@ class SchedulerNodes:
         self.summarizer = Summarizer(settings)
         self.embedding_service = EmbeddingService(settings)
         self.ingest_registry = IngestProviderRegistry()
+        self.market_impact_classifier = MarketImpactClassifier(settings)
         self.trace_service = RuntimeTraceService(session_factory, settings)
         self.alert_service = RuntimeAlertService(session_factory, settings)
 
@@ -493,8 +173,14 @@ class SchedulerNodes:
             source_repo = SourceRepository(session)
             sources = await source_repo.list_all_enabled()
             if not sources:
-                logger.info("scheduler creating default sources")
-                sources = await source_repo.ensure_default_sources()
+                default_sources = _default_sources_from_settings(self.settings)
+                if default_sources:
+                    logger.info(
+                        "scheduler creating configured default sources",
+                        extra={"source_count": len(default_sources)},
+                    )
+                    sources = await source_repo.ensure_default_sources(default_sources)
+            sources = [source for source in sources if _source_is_due(source, self.settings)]
             tickers = await self._market_universe_symbols(session)
             job = await JobRepository(session).start(job_type)
             await session.commit()
@@ -511,6 +197,9 @@ class SchedulerNodes:
                 "fetch_mode": source.fetch_mode,
                 "enabled": source.enabled,
                 "trust_score": source.trust_score,
+                "last_fetched_at": source.last_fetched_at,
+                "last_success_at": source.last_success_at,
+                "last_error": source.last_error,
                 "category": source.category,
             }
             for source in sources
@@ -580,6 +269,7 @@ class SchedulerNodes:
                     ),
                     timeout_seconds=self.settings.rss_fetch_timeout_seconds + 2,
                 )
+                articles = _limit_articles_for_source(source, articles, self.settings)
                 provider_counts[source["provider"]] = provider_counts.get(
                     source["provider"],
                     0,
@@ -606,6 +296,7 @@ class SchedulerNodes:
                             "published_at": article.published_at,
                             "summary": article.body_text,
                             "author": article.author,
+                            "provider_metadata": dict(article.metadata or {}),
                         }
                     )
                 async with self.session_factory() as session:
@@ -739,6 +430,8 @@ class SchedulerNodes:
         )
         saved_articles: list[dict[str, Any]] = []
         due_tickers = {ticker.upper() for ticker in state.get("due_tickers", [])}
+        rejected_article_count = 0
+        classification_metadata: list[dict[str, Any]] = []
 
         async with self.session_factory() as session:
             article_repo = ArticleRepository(session)
@@ -747,9 +440,24 @@ class SchedulerNodes:
             for item in state.get("fetched_articles", []):
                 title = item["title"]
                 text = item.get("summary") or ""
-                if not _is_market_impact_article(title, text, item.get("category", "")):
+                classification = await self.market_impact_classifier.classify(
+                    title=title,
+                    text=text,
+                    category=item.get("category", ""),
+                    source=item.get("source_name", ""),
+                    provider=item.get("provider", ""),
+                )
+                classification_metadata.append(
+                    {
+                        "title": title[:160],
+                        "url": item.get("url"),
+                        **classification.metadata(),
+                    }
+                )
+                if not classification.accepted:
+                    rejected_article_count += 1
                     continue
-                related_tickers = [ticker for ticker in due_tickers if ticker in title.upper()]
+                related_tickers = _related_tickers_for_title(title, due_tickers)
                 article, created = await article_repo.upsert_article(
                     source_id=item["source_id"],
                     url=item["url"],
@@ -784,6 +492,8 @@ class SchedulerNodes:
         metadata = {
             **state.get("metadata", {}),
             "saved_article_count": len(saved_articles),
+            "rejected_article_count": rejected_article_count,
+            "market_impact_classifications": classification_metadata[:50],
             "market_snapshot_count": len(state.get("market_snapshots", [])),
         }
         logger.info(
@@ -831,70 +541,6 @@ class SchedulerNodes:
             extra={"embedding_count": len(saved_articles)},
         )
         return state
-
-
-def _parse_symbol_csv(value: str) -> list[str]:
-    return [
-        item.strip().upper()
-        for item in value.split(",")
-        if item.strip() and item.strip().replace(".", "").isalpha()
-    ]
-
-
-MARKET_IMPACT_CATEGORIES = {
-    "business",
-    "companies",
-    "earnings",
-    "filings",
-    "finance",
-    "macro",
-    "markets",
-    "policy",
-    "regulatory",
-    "technology",
-    "tech",
-}
-MARKET_IMPACT_TERMS = {
-    "acquisition",
-    "antitrust",
-    "bank",
-    "bond",
-    "capex",
-    "company",
-    "cpi",
-    "earnings",
-    "economy",
-    "export control",
-    "fed",
-    "filing",
-    "forecast",
-    "guidance",
-    "inflation",
-    "ipo",
-    "market",
-    "merger",
-    "nasdaq",
-    "policy",
-    "profit",
-    "rates",
-    "regulation",
-    "revenue",
-    "sales",
-    "sanction",
-    "semiconductor",
-    "shares",
-    "stock",
-    "tariff",
-    "treasury",
-}
-
-
-def _is_market_impact_article(title: str, text: str, category: str) -> bool:
-    normalized_category = (category or "").strip().lower()
-    if normalized_category in MARKET_IMPACT_CATEGORIES:
-        return True
-    haystack = f"{title} {text}".lower()
-    return any(term in haystack for term in MARKET_IMPACT_TERMS)
 
     async def precompute_summaries(self, state: SchedulerState) -> SchedulerState:
         summaries: list[str] = []
@@ -955,7 +601,7 @@ def _is_market_impact_article(title: str, text: str, category: str) -> bool:
 
     async def extract_mentions(self, state: SchedulerState) -> SchedulerState:
         async with self.session_factory() as session:
-            count = await extract_market_mentions(session, limit=100)
+            count = await extract_market_mentions(session, self.settings, limit=100)
             await session.commit()
         metadata = {**state.get("metadata", {}), "mention_count": count}
         return {**state, "metadata": metadata}
@@ -1000,3 +646,79 @@ def _is_market_impact_article(title: str, text: str, category: str) -> bool:
                     },
                 )
         return state
+
+
+def _parse_symbol_csv(value: str) -> list[str]:
+    return [
+        item.strip().upper()
+        for item in value.split(",")
+        if item.strip() and item.strip().replace(".", "").isalpha()
+    ]
+
+
+def _source_is_due(source: Source, settings: Settings, now: datetime | None = None) -> bool:
+    if source.last_fetched_at is None:
+        return True
+    now = now or datetime.now(UTC)
+    last_fetched_at = source.last_fetched_at
+    if last_fetched_at.tzinfo is None:
+        last_fetched_at = last_fetched_at.replace(tzinfo=UTC)
+    interval = _config_int(
+        dict(source.config or {}),
+        "fetch_interval_seconds",
+        settings.source_default_fetch_interval_seconds,
+    )
+    return (now - last_fetched_at).total_seconds() >= max(interval, 0)
+
+
+def _limit_articles_for_source(source: dict[str, Any], articles: list, settings: Settings) -> list:
+    config = dict(source.get("config") or {})
+    max_items = _config_int(config, "max_items", settings.source_max_items_per_fetch)
+    max_age_hours = _config_int(config, "max_item_age_hours", settings.source_max_item_age_hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
+    filtered = [
+        article
+        for article in articles
+        if article.published_at is None or _aware_datetime(article.published_at) >= cutoff
+    ]
+    return filtered[: max(max_items, 0)]
+
+
+def _config_int(config: dict[str, Any], key: str, default: int) -> int:
+    try:
+        return int(config.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _default_sources_from_settings(settings: Settings) -> list[dict[str, object]]:
+    raw = settings.default_sources_json.strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("invalid DEFAULT_SOURCES_JSON; no default sources will be created")
+        return []
+    if not isinstance(parsed, list):
+        logger.warning("DEFAULT_SOURCES_JSON must be a JSON array")
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
+
+
+def _aware_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _related_tickers_for_title(title: str, due_tickers: set[str]) -> list[str]:
+    matches: list[str] = []
+    for ticker in sorted(due_tickers):
+        if len(ticker) == 1:
+            if re.search(rf"\${re.escape(ticker)}(?:\b|$)", title, flags=re.IGNORECASE):
+                matches.append(ticker)
+            continue
+        if re.search(rf"(?<![A-Za-z0-9$]){re.escape(ticker)}(?![A-Za-z0-9])", title):
+            matches.append(ticker)
+    return matches

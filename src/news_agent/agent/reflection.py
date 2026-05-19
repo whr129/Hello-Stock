@@ -24,7 +24,7 @@ Return only valid JSON with this exact schema:
 {
   "verdict": "pass" | "retry" | "fail",
   "reason": "short internal reason",
-  "corrected_intent": "stocks|runtime|research|candidates|signals|general_chat|help|null",
+  "corrected_intent": "runtime|research|candidates|signals|general_chat|help|null",
   "corrected_args": ["STRING", "..."]
 }
 
@@ -35,8 +35,6 @@ Rules:
 - Use "fail" only when the answer is unusable and retrying with a different route is not likely
   to help.
 - Do not retry for minor style issues, missing nuance, or harmless wording.
-- If the user asks about stocks, prices, tickers, securities, or technical analysis,
-  corrected_intent should usually be "stocks".
 - If the user asks about runtime history, traces, jobs, alerts, refresh failures, or debugging,
   corrected_intent should usually be "runtime".
 - If the user asks for market-moving news, company-impact research, macro,
@@ -48,7 +46,6 @@ Rules:
 """.strip()
 
 RETRYABLE_INTENTS: set[str] = {
-    "stocks",
     "runtime",
     "research",
     "candidates",
@@ -140,7 +137,6 @@ def _reflection_payload(state: dict[str, Any]) -> str:
         "route": state.get("route", {}),
         "completed_agents": state.get("completed_agents", []),
         "news_metadata": state.get("news_result", {}).get("metadata", {}),
-        "market_metadata": state.get("market_result", {}).get("metadata", {}),
         "runtime_metadata": state.get("runtime_result", {}).get("metadata", {}),
         "search_metadata": state.get("search_result", {}).get("metadata", {}),
         "final_response": str(state.get("final_response", ""))[:4000],

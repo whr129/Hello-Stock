@@ -35,6 +35,8 @@ dev = [
 [project.scripts]
 news-agent = "news_agent.main:main"
 news-agent-scheduler = "news_agent.scheduler.jobs:main"
+news-agent-reset-data = "news_agent.maintenance.cleanup:main"
+news-agent-eval = "news_agent.evaluation.runner:main"
 
 [build-system]
 requires = ["hatchling"]

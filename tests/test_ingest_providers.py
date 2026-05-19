@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from news_agent.ingestion.providers import AccountFeedProvider, RSSIngestProvider
 
 
@@ -58,3 +60,17 @@ def test_account_feed_provider_uses_field_mapping(monkeypatch) -> None:
     assert items[0].title == "Ignored"
     assert items[0].body_text == "Summary"
     assert items[0].author == "Author"
+
+
+def test_twitter_provider_requires_feed_url() -> None:
+    source = SimpleNamespace(
+        id=2,
+        provider="twitter",
+        external_account="@openai",
+        url="twitter://@openai",
+        config={},
+        field_mapping={},
+    )
+
+    with pytest.raises(ValueError, match="twitter source requires config.feed_url"):
+        AccountFeedProvider("twitter").fetch_items(source, timeout_seconds=5)

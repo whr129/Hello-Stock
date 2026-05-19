@@ -1,0 +1,3 @@
+{"id":"candidates_basic","prompt":"/candidates","expected":"Ranks market attention candidates only when evidence exists; includes ticker/theme, components, evidence, weak evidence, and safety caveat; never ranks fake tickers A, V, or THIS."}
+{"id":"signals_mu","prompt":"/signals MU","expected":"Explains MU signal or no-signal state with score components, recent evidence, weak evidence, and no buy/sell advice."}
+{"id":"research_semis","prompt":"Run market research on semiconductors and AI infrastructure.","expected":"Uses market research path, discusses semiconductor or AI infrastructure themes, cites stored evidence when available, and avoids unsupported ticker invention."}

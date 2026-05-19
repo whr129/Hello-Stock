@@ -23,7 +23,7 @@ class DummySupervisorNodes:
     async def route_request(self, state):
         self.calls.append("route_request")
         requested_agents = (
-            ["news", "market"] if "mixed" in state.get("message_text", "") else ["news"]
+            ["news", "runtime"] if "mixed" in state.get("message_text", "") else ["news"]
         )
         return {
             **state,
@@ -39,17 +39,6 @@ class DummySupervisorNodes:
         return {
             **state,
             "news_result": {"response": "news response"},
-            "pending_agents": pending,
-            "completed_agents": completed,
-        }
-
-    async def run_market_agent(self, state):
-        self.calls.append("run_market_agent")
-        pending = [agent for agent in state.get("pending_agents", []) if agent != "market"]
-        completed = list(state.get("completed_agents", [])) + ["market"]
-        return {
-            **state,
-            "market_result": {"response": "market response"},
             "pending_agents": pending,
             "completed_agents": completed,
         }
@@ -72,15 +61,26 @@ class DummySupervisorNodes:
             "completed_agents": completed,
         }
 
+    async def run_research_agent(self, state):
+        self.calls.append("run_research_agent")
+        pending = [agent for agent in state.get("pending_agents", []) if agent != "research"]
+        completed = list(state.get("completed_agents", [])) + ["research"]
+        return {
+            **state,
+            "research_result": {"response": "research response"},
+            "pending_agents": pending,
+            "completed_agents": completed,
+        }
+
     async def merge_agent_outputs(self, state):
         self.calls.append("merge_agent_outputs")
         parts = []
         if state.get("news_result"):
             parts.append(state["news_result"]["response"])
-        if state.get("market_result"):
-            parts.append(state["market_result"]["response"])
         if state.get("runtime_result"):
             parts.append(state["runtime_result"]["response"])
+        if state.get("research_result"):
+            parts.append(state["research_result"]["response"])
         if state.get("search_result"):
             parts.append(state["search_result"]["response"])
         return {**state, "final_response": "\n\n".join(parts), "response": "\n\n".join(parts)}
@@ -108,21 +108,21 @@ async def test_chat_graph_runs_single_news_subagent(monkeypatch) -> None:
 
     assert result["response"] == "news response"
     assert "run_news_agent" in calls
-    assert "run_market_agent" not in calls
+    assert "run_runtime_agent" not in calls
     assert calls[-1] == "persist_session"
 
 
 @pytest.mark.asyncio
-async def test_chat_graph_runs_both_subagents_for_mixed_route(monkeypatch) -> None:
+async def test_chat_graph_runs_multiple_subagents_for_mixed_route(monkeypatch) -> None:
     monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", DummySupervisorNodes)
 
     graph = build_chat_graph(session_factory=None, settings=Settings(openai_api_key=""))
     result = await graph.ainvoke({"message_text": "mixed route"})
     calls = result["metadata"]["calls"]
 
-    assert result["response"] == "news response\n\nmarket response"
+    assert result["response"] == "news response\n\nruntime response"
     assert "run_news_agent" in calls
-    assert "run_market_agent" in calls
+    assert "run_runtime_agent" in calls
 
 
 @pytest.mark.asyncio
@@ -178,14 +178,14 @@ async def test_chat_graph_reflection_retries_with_corrected_route(monkeypatch) -
 
         async def route_request(self, state):
             self.calls.append("route_request")
-            if state.get("intent") == "stocks":
+            if state.get("intent") == "research":
                 return {
                     **state,
                     "route": {
-                        "agents": ["market"],
-                        "capabilities": ["market_snapshot", "technical_analysis"],
+                        "agents": ["research"],
+                        "capabilities": ["market_research"],
                     },
-                    "pending_agents": ["market"],
+                    "pending_agents": ["research"],
                     "completed_agents": [],
                 }
             return {
@@ -203,7 +203,7 @@ async def test_chat_graph_reflection_retries_with_corrected_route(monkeypatch) -
                 metadata["reflection_retry"] = True
                 return {
                     **state,
-                    "intent": "stocks",
+                    "intent": "research",
                     "args": ["AAPL"],
                     "requested_symbols": ["AAPL"],
                     "route": {},
@@ -223,10 +223,10 @@ async def test_chat_graph_reflection_retries_with_corrected_route(monkeypatch) -
     result = await graph.ainvoke({"message_text": "what is Apple doing today?"})
     calls = result["metadata"]["calls"]
 
-    assert result["response"] == "market response"
+    assert result["response"] == "research response"
     assert calls.count("route_request") == 2
     assert "run_general_search" in calls
-    assert "run_market_agent" in calls
+    assert "run_research_agent" in calls
 
 
 @pytest.mark.asyncio
@@ -234,7 +234,7 @@ async def test_chat_graph_reflection_exhaustion_persists_note(monkeypatch) -> No
     class ReflectionExhaustedNodes(DummySupervisorNodes):
         note = (
             "Note: I could not confidently repair this answer after a reflection retry. "
-            "You may want to rephrase or use a direct command such as /research, /stocks, "
+            "You may want to rephrase or use a direct command such as /research, /candidates, "
             "or /runtime."
         )
 

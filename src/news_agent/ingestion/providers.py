@@ -30,6 +30,8 @@ class RSSIngestProvider:
         feed_url = str(
             (source.config or {}).get("feed_url") or source.external_account or source.url
         )
+        if not feed_url:
+            raise ValueError("rss source requires a feed URL before it can be fetched")
         articles = parse_feed(feed_url, timeout_seconds=timeout_seconds)
         return [
             _map_feed_article(

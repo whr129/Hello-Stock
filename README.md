@@ -1,6 +1,6 @@
 # Hello Stock
 
-Telegram assistant for market-impact research, stock snapshots, technical analysis, runtime debugging, memory, source management, and general web questions. The project uses a LangGraph supervisor, Postgres + pgvector, and OpenAI for routing, summarization, embeddings, web search, and memory consolidation.
+Telegram assistant for market-impact research, runtime debugging, memory, source management, and general web questions. The project uses a LangGraph supervisor, Postgres + pgvector, and OpenAI for routing, summarization, embeddings, web search, evaluation, and memory consolidation.
 
 ## What It Does
 
@@ -8,7 +8,6 @@ Telegram assistant for market-impact research, stock snapshots, technical analys
 - Uses focused subagents:
   - `news_agent` for source management, refresh control, skills/help, and memory tools.
   - `research_agent` for market-impact extraction, signal scoring, candidates, and ticker evidence.
-  - `market_agent` for explicit ticker quotes and lightweight technical analysis.
   - `runtime_agent` for refresh inspection, trace lookup, error review, alert summaries, and calling-history debugging.
 - Uses LangGraph-style short-term memory per chat thread and an async long-term memory pipeline backed by a vector store.
 - Answers off-domain or stale-data queries with OpenAI web search.
@@ -34,11 +33,9 @@ flowchart TD
     telegram[Telegram update] --> supervisor[LangGraph supervisor]
     supervisor --> router[LLM intent router]
     router --> news[News subagent]
-    router --> market[Market subagent]
     router --> runtime[Runtime subagent]
     router --> search[General web search]
     news --> merge[merge outputs]
-    market --> merge
     runtime --> merge
     search --> merge
     merge --> guardrails[financial guardrails]
@@ -121,15 +118,15 @@ PYTHONPATH=src .venv/bin/ruff check .
 ## Architecture Notes
 
 - `src/news_agent/app/supervisor.py` is the main LangGraph entrypoint.
-- `src/news_agent/domains/news/`, `domains/market/`, and `domains/runtime/` hold the subagents.
+- `src/news_agent/domains/news/` and `domains/runtime/` hold the command subagents.
 - `src/news_agent/research/` contains planner-driven market research extraction, scoring, and reporting.
+- `src/news_agent/search/` contains the general search agent.
 - `src/news_agent/memory/` contains the short-term message-state helpers and the async long-term memory consolidation service.
 - `src/news_agent/observability/` records runtime runs, ordered step traces, errors, and alert deliveries.
 - `src/news_agent/graph/chat_graph.py` remains a compatibility entrypoint that delegates to the supervisor graph.
 
 ## Telegram Commands
 
-- `/stocks <ticker...>`
 - `/research`, `/candidates`, `/signals <ticker>`, `/researchstatus`
 - `/sources`, `/addsource <provider> <target>`, `/sourceconfig <id> <key> <value>`, `/sourcefields <id> <field> <value>`, `/sourcetest <id>`, `/removesource <id>`
 - `/refresh`
@@ -138,7 +135,6 @@ PYTHONPATH=src .venv/bin/ruff check .
 - `/skills`, `/help`
 
 You can also ask natural-language questions directly, for example:
-- `what's google performance today`
 - `research nvidia and today's ai capex news`
 - `who won the world series last year?`
 - `what happened in the last refresh?`
@@ -151,6 +147,7 @@ Supported source types are `rss`, `twitter`, and `newsletter`.
 - `rss` works directly with a feed URL.
 - `twitter` and `newsletter` are currently feed-backed account sources, not native API integrations.
 - For `twitter` or `newsletter`, you usually need `config.feed_url` after `/addsource`.
+- No broad default feeds are created unless `DEFAULT_SOURCES_JSON` is configured.
 
 Example:
 
@@ -162,7 +159,27 @@ Example:
 
 ## Safety
 
-Stock output is informational only. The market path can summarize price movement and indicators, but it should not provide buy/sell recommendations.
+Market research output is informational only. The assistant should not provide buy/sell recommendations.
+
+## Maintenance And Evaluation
+
+Reset generated data while preserving users, sources, and memory:
+
+```bash
+PYTHONPATH=src .venv/bin/news-agent-reset-data --scope generated
+```
+
+Reset all application data while preserving the schema:
+
+```bash
+PYTHONPATH=src .venv/bin/news-agent-reset-data --scope all
+```
+
+Run market-research answer evaluation:
+
+```bash
+PYTHONPATH=src .venv/bin/news-agent-eval
+```
 
 ## Runtime Alerts
 

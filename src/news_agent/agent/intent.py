@@ -4,11 +4,10 @@ import logging
 from openai import APIError, AsyncOpenAI
 
 from news_agent.agent.router import extract_stock_symbols, parse_message
-from news_agent.graph.state import Intent
+from news_agent.app.state import Intent
 from news_agent.settings import Settings
 
 ROUTABLE_INTENTS: set[Intent] = {
-    "stocks",
     "runtime",
     "research",
     "candidates",
@@ -24,14 +23,11 @@ You are the routing layer for a Telegram assistant with three product surfaces:
 
 Return only valid JSON with this exact schema:
 {
-  "intent": "stocks" | "runtime" | "research" | "candidates"
-    | "signals" | "general_chat" | "help",
+  "intent": "runtime" | "research" | "candidates" | "signals" | "general_chat" | "help",
   "args": ["STRING", "..."]
 }
 
 Routing policy:
-- Use "stocks" for requests about stock price, quote, performance, movement,
-  ticker lookup, chart-style commentary, or technical analysis.
 - Use "research" for market-impact questions about finance, earnings, filings,
   macro, company-impacting technology, policy/regulatory, or geopolitics with
   plausible market relevance.
@@ -50,7 +46,6 @@ Routing policy:
   flows. These requests will be answered with general web search.
 
 Args policy:
-- For "stocks", args should contain canonical ticker symbols when identifiable from the message.
 - For "research" and "signals", args should contain identifiable ticker symbols
   when relevant.
 - If a company name clearly maps to a public ticker, resolve it to the ticker.
@@ -58,7 +53,7 @@ Args policy:
 - Keep args empty when no useful structured symbol extraction is possible.
 
 Examples:
-- "what's google performance today" -> {"intent":"stocks","args":["GOOGL"]}
+- "what's google performance today" -> {"intent":"general_chat","args":[]}
 - "research nvidia and today's ai capex news" -> {"intent":"research","args":["NVDA"]}
 - "what happened in the stock market today" -> {"intent":"research","args":[]}
 - "what happened in the last refresh?" -> {"intent":"runtime","args":[]}
@@ -115,7 +110,7 @@ class IntentClassifier:
             routed_args = []
 
         normalized_args = self._normalize_args(routed_args)
-        if routed_intent in {"stocks", "research", "signals"} and not normalized_args:
+        if routed_intent in {"research", "signals"} and not normalized_args:
             normalized_args = extract_stock_symbols(text)
         return "", normalized_args, routed_intent
 
@@ -156,7 +151,7 @@ class IntentClassifier:
         ):
             return "", symbols, "research"
         if symbols:
-            return "", symbols, "stocks"
+            return "", symbols, "research"
         return "", [], "general_chat"
 
     def _normalize_args(self, args: list[object]) -> list[str]:
