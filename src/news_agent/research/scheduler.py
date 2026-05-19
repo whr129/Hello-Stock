@@ -21,16 +21,21 @@ SCORING_WINDOWS: dict[str, timedelta] = {
 }
 
 
-async def extract_market_mentions(session: AsyncSession, *, limit: int = 50) -> int:
+async def extract_market_mentions(
+    session: AsyncSession,
+    settings: Settings | None = None,
+    *,
+    limit: int = 50,
+) -> int:
     repository = MarketMentionRepository(session)
-    extractor = MentionExtractor()
+    extractor = MentionExtractor(settings)
     saved = 0
 
     for article, source in await repository.list_articles_for_extraction(limit=limit):
         source_family = article.category or "news"
         trust_score = source.trust_score if source else 0.5
         text = " ".join(part for part in (article.title, article.extracted_text or "") if part)
-        for mention in extractor.extract(
+        for mention in await extractor.extract_async(
             text=text,
             related_tickers=article.related_tickers,
             source_family=source_family,
@@ -45,7 +50,7 @@ async def extract_market_mentions(session: AsyncSession, *, limit: int = 50) -> 
         related_tickers = article.related_tickers if article else []
         source_family = article.category if article else "news"
         trust_score = source.trust_score if source else 0.5
-        for mention in extractor.extract(
+        for mention in await extractor.extract_async(
             text=summary.text,
             related_tickers=related_tickers,
             source_family=source_family or "news",

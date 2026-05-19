@@ -67,7 +67,7 @@ class GeneralSearchService:
                 query=normalized_query,
                 answer=(
                     "General web search is unavailable right now. "
-                    "Try /research or /stocks SYMBOL."
+                    "Try /research, /candidates, or /signals SYMBOL."
                 ),
                 sources=[],
                 metadata={"status": "unavailable"},

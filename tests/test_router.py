@@ -1,12 +1,12 @@
-from news_agent.agent.router import parse_message, route_intent, route_request
+from news_agent.agent.router import parse_message, route_request
 
 
 def test_parse_command_intent() -> None:
-    command, args, intent = parse_message("/stocks AAPL tsla")
+    command, args, intent = parse_message("/research AAPL tsla")
 
-    assert command == "/stocks"
+    assert command == "/research"
     assert args == ["AAPL", "tsla"]
-    assert intent == "stocks"
+    assert intent == "research"
 
 
 def test_parse_broad_stock_market_question_defers_to_router() -> None:
@@ -73,13 +73,6 @@ def test_parse_research_commands() -> None:
     assert parse_message("/candidates")[2] == "candidates"
     assert parse_message("/signals MU")[2] == "signals"
     assert parse_message("/researchstatus")[2] == "researchstatus"
-
-
-def test_route_stocks_to_stock_tool_without_news_context() -> None:
-    route = route_intent("stocks")
-
-    assert route.agents == ("market",)
-    assert route.capabilities == ("market_snapshot", "technical_analysis")
 
 
 def test_route_research_to_research_agent_for_market_news() -> None:

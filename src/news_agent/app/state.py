@@ -4,7 +4,6 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
 Intent = Literal[
-    "stocks",
     "sources",
     "addsource",
     "removesource",
@@ -30,7 +29,7 @@ Intent = Literal[
     "unknown",
 ]
 
-AgentName = Literal["news", "market", "runtime", "research"]
+AgentName = Literal["news", "runtime", "research"]
 Capability = Literal[
     "source_admin",
     "scheduler_admin",
@@ -39,8 +38,6 @@ Capability = Literal[
     "runtime_alerts",
     "skills",
     "help",
-    "market_snapshot",
-    "technical_analysis",
     "general_search",
     "market_research",
 ]
@@ -77,7 +74,6 @@ class SupervisorState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     user_context: UserContext
     news_result: AgentResult
-    market_result: AgentResult
     runtime_result: AgentResult
     research_result: AgentResult
     search_result: AgentResult

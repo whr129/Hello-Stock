@@ -9,10 +9,8 @@ from news_agent.agent.intent import IntentClassifier
 from news_agent.agent.reflection import ReflectionService
 from news_agent.agent.router import help_response, route_request
 from news_agent.app.state import SupervisorState
-from news_agent.domains.market.subagent import MarketSubagent
 from news_agent.domains.news.subagent import NewsSubagent
 from news_agent.domains.runtime.subagent import RuntimeSubagent
-from news_agent.markets.yahoo import YahooMarketDataProvider
 from news_agent.memory.consolidation import MemoryConsolidationService
 from news_agent.memory.embeddings import EmbeddingService
 from news_agent.memory.short_term import (
@@ -40,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 REFLECTION_EXHAUSTED_NOTE = (
     "Note: I could not confidently repair this answer after a reflection retry. "
-    "You may want to rephrase or use a direct command such as /research, /stocks, or /runtime."
+    "You may want to rephrase or use a direct command such as /research, /candidates, or /runtime."
 )
 
 
@@ -56,7 +54,7 @@ def _next_step(state: SupervisorState) -> str:
         return "run_runtime_agent"
     if pending[0] == "research":
         return "run_research_agent"
-    return "run_market_agent"
+    return "merge_agent_outputs"
 
 
 def _should_run_search(state: SupervisorState) -> bool:
@@ -68,8 +66,7 @@ def _should_run_search(state: SupervisorState) -> bool:
         return True
 
     news_meta = state.get("news_result", {}).get("metadata", {})
-    market_meta = state.get("market_result", {}).get("metadata", {})
-    return bool(news_meta.get("needs_search_fallback") or market_meta.get("needs_search_fallback"))
+    return bool(news_meta.get("needs_search_fallback"))
 
 
 def _after_reflection(state: SupervisorState) -> str:
@@ -84,7 +81,6 @@ class SupervisorNodes:
         self.settings = settings
         self.intent_classifier = IntentClassifier(settings)
         self.news_agent = NewsSubagent(session_factory, settings)
-        self.market_agent = MarketSubagent(session_factory, settings, YahooMarketDataProvider())
         self.runtime_agent = RuntimeSubagent(session_factory, settings)
         self.research_agent = ResearchSubagent(session_factory, settings)
         self.search_service = GeneralSearchService(settings)
@@ -175,17 +171,6 @@ class SupervisorNodes:
             "completed_agents": completed,
         }
 
-    async def run_market_agent(self, state: SupervisorState) -> SupervisorState:
-        result = await self.market_agent.run(state)
-        pending = [agent for agent in state.get("pending_agents", []) if agent != "market"]
-        completed = list(state.get("completed_agents", [])) + ["market"]
-        return {
-            **state,
-            "market_result": result,
-            "pending_agents": pending,
-            "completed_agents": completed,
-        }
-
     async def run_runtime_agent(self, state: SupervisorState) -> SupervisorState:
         result = await self.runtime_agent.run(state)
         pending = [agent for agent in state.get("pending_agents", []) if agent != "runtime"]
@@ -237,17 +222,13 @@ class SupervisorNodes:
         else:
             parts: list[str] = []
             news_response = state.get("news_result", {}).get("response")
-            market_response = state.get("market_result", {}).get("response")
             runtime_response = state.get("runtime_result", {}).get("response")
             research_response = state.get("research_result", {}).get("response")
             search_response = state.get("search_result", {}).get("response")
             news_meta = state.get("news_result", {}).get("metadata", {})
-            market_meta = state.get("market_result", {}).get("metadata", {})
             general_only = "general_search" in set(route.get("capabilities", []))
             if news_response:
                 parts.append(news_response)
-            if market_response:
-                parts.append(market_response)
             if runtime_response:
                 parts.append(runtime_response)
             if research_response:
@@ -255,25 +236,10 @@ class SupervisorNodes:
             if search_response:
                 if general_only:
                     parts = [search_response]
-                elif (
-                    news_meta.get("needs_search_fallback")
-                    and market_meta.get("needs_search_fallback")
-                ):
-                    parts.append(
-                        "Fresh stored news and market snapshot data were unavailable, "
-                        "so this answer uses web search."
-                    )
-                    parts.append(search_response)
                 elif news_meta.get("needs_search_fallback"):
                     parts.append(
                         "Fresh stored news data were unavailable, "
                         "so the following answer uses web search."
-                    )
-                    parts.append(search_response)
-                elif market_meta.get("needs_search_fallback"):
-                    parts.append(
-                        "Fresh market data were unavailable, "
-                        "so the following answer uses web search context."
                     )
                     parts.append(search_response)
             response = "\n\n".join(parts) if parts else help_response()
@@ -285,10 +251,7 @@ class SupervisorNodes:
         capabilities = set(state.get("route", {}).get("capabilities", []))
         if state.get("research_result", {}).get("response"):
             response = enforce_financial_guardrails(response)
-        elif state.get("market_result", {}).get("response") or (
-            state.get("search_result", {}).get("response")
-            and {"market_snapshot", "technical_analysis"} & capabilities
-        ):
+        elif state.get("search_result", {}).get("response") and "general_search" in capabilities:
             response = enforce_financial_guardrails(response)
         return {**state, "final_response": response, "response": response}
 
@@ -348,7 +311,6 @@ class SupervisorNodes:
                 "pending_agents": [],
                 "completed_agents": [],
                 "news_result": {},
-                "market_result": {},
                 "runtime_result": {},
                 "research_result": {},
                 "search_result": {},
@@ -561,10 +523,6 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         nodes.traced("run_news_agent", nodes.run_news_agent, step_type="subagent"),
     )
     graph.add_node(
-        "run_market_agent",
-        nodes.traced("run_market_agent", nodes.run_market_agent, step_type="subagent"),
-    )
-    graph.add_node(
         "run_runtime_agent",
         nodes.traced("run_runtime_agent", nodes.run_runtime_agent, step_type="subagent"),
     )
@@ -602,7 +560,6 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         _next_step,
         {
             "run_news_agent": "run_news_agent",
-            "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
             "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",
@@ -614,19 +571,6 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         _next_step,
         {
             "run_news_agent": "run_news_agent",
-            "run_market_agent": "run_market_agent",
-            "run_runtime_agent": "run_runtime_agent",
-            "run_research_agent": "run_research_agent",
-            "run_general_search": "run_general_search",
-            "merge_agent_outputs": "merge_agent_outputs",
-        },
-    )
-    graph.add_conditional_edges(
-        "run_market_agent",
-        _next_step,
-        {
-            "run_news_agent": "run_news_agent",
-            "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
             "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",
@@ -638,7 +582,6 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         _next_step,
         {
             "run_news_agent": "run_news_agent",
-            "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
             "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",
@@ -650,7 +593,6 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         _next_step,
         {
             "run_news_agent": "run_news_agent",
-            "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
             "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",

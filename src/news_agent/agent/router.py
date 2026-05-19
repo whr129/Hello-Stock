@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from news_agent.app.state import Capability, Intent
 
 COMMAND_INTENTS: dict[str, Intent] = {
-    "/stocks": "stocks",
     "/sources": "sources",
     "/addsource": "addsource",
     "/removesource": "removesource",
@@ -44,7 +43,7 @@ class RouteDecision:
 
 def help_response() -> str:
     return (
-        "I can help with market-impact research, stock context, source management, "
+        "I can help with market-impact research, source management, "
         "runtime inspection, memory, and general web lookups. "
         "Try /skills for the full command list, or ask a general question directly."
     )
@@ -53,9 +52,6 @@ def help_response() -> str:
 def skills_response() -> str:
     return (
         "Available skills and commands:\n"
-        "\n"
-        "Market data and technical analysis\n"
-        "- /stocks <ticker...>\n"
         "\n"
         "Market-impact research\n"
         "- /research\n"
@@ -113,14 +109,6 @@ def route_request(
 ) -> RouteDecision:
     del command
     args = args or []
-    has_symbol_args = any(_looks_like_ticker(item) for item in args)
-
-    del has_symbol_args
-    if intent == "stocks":
-        return RouteDecision(
-            agents=("market",),
-            capabilities=("market_snapshot", "technical_analysis"),
-        )
     if intent in {"sources", "addsource", "removesource"}:
         return RouteDecision(agents=("news",), capabilities=("source_admin",))
     if intent in {"sourceconfig", "sourcefields", "sourcetest"}:

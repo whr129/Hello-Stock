@@ -65,7 +65,11 @@ class ResearchSubagent:
                     "research:extract_mentions",
                     {"limit": 100},
                 )
-                mention_count = await extract_market_mentions(session, limit=100)
+                mention_count = await extract_market_mentions(
+                    session,
+                    self.settings,
+                    limit=100,
+                )
                 await self._finish_iteration_step(
                     extraction_step_id,
                     {"mention_count": mention_count},

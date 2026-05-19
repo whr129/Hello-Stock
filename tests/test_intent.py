@@ -41,11 +41,11 @@ class FakeClient:
 async def test_intent_classifier_uses_command_without_llm() -> None:
     classifier = IntentClassifier(Settings(openai_api_key=""))
 
-    command, args, intent = await classifier.classify("/stocks AAPL")
+    command, args, intent = await classifier.classify("/research AAPL")
 
-    assert command == "/stocks"
+    assert command == "/research"
     assert args == ["AAPL"]
-    assert intent == "stocks"
+    assert intent == "research"
 
 
 @pytest.mark.asyncio
@@ -71,13 +71,13 @@ async def test_intent_classifier_falls_back_to_general_chat_without_llm() -> Non
 @pytest.mark.asyncio
 async def test_intent_classifier_uses_llm_router_for_company_ticker() -> None:
     classifier = IntentClassifier(Settings(openai_api_key="test"))
-    classifier.client = FakeClient('{"intent": "stocks", "args": ["GOOGL"]}')
+    classifier.client = FakeClient('{"intent": "general_chat", "args": []}')
 
     command, args, intent = await classifier.classify("give me price for Google")
 
     assert command == ""
-    assert args == ["GOOGL"]
-    assert intent == "stocks"
+    assert args == []
+    assert intent == "general_chat"
 
 
 @pytest.mark.asyncio
@@ -114,6 +114,6 @@ async def test_intent_classifier_uses_llm_router_for_runtime_request() -> None:
 
 
 def test_router_prompt_mentions_supported_outputs() -> None:
-    assert '"intent": "stocks" | "runtime" | "research"' in ROUTER_SYSTEM_PROMPT
+    assert '"intent": "runtime" | "research"' in ROUTER_SYSTEM_PROMPT
     assert '"signals" | "general_chat" | "help"' in ROUTER_SYSTEM_PROMPT
     assert "Return only valid JSON" in ROUTER_SYSTEM_PROMPT

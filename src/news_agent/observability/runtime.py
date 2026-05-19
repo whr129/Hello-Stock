@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from telegram import Bot
+from telegram.error import TelegramError
 
 from news_agent.settings import Settings
 from news_agent.storage.repositories import (
@@ -13,6 +15,8 @@ from news_agent.storage.repositories import (
     RuntimeRunRepository,
     RuntimeStepRepository,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RuntimeTraceService:
@@ -127,12 +131,21 @@ class RuntimeAlertService:
         delivered_at: datetime | None = None
         status = "skipped"
         if self.bot and self.settings.runtime_alert_telegram_chat_id:
-            await self.bot.send_message(
-                chat_id=self.settings.runtime_alert_telegram_chat_id,
-                text=message_text,
-            )
-            delivered_at = datetime.now(UTC)
-            status = "delivered"
+            try:
+                await self.bot.send_message(
+                    chat_id=self.settings.runtime_alert_telegram_chat_id,
+                    text=message_text,
+                )
+            except TelegramError as exc:
+                logger.warning(
+                    "runtime alert delivery failed target=%s error=%s",
+                    target,
+                    exc,
+                )
+                status = "failed"
+            else:
+                delivered_at = datetime.now(UTC)
+                status = "delivered"
 
         async with self.session_factory() as session:
             await RuntimeAlertRepository(session).create(

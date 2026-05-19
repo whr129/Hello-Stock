@@ -199,31 +199,31 @@ class SourceRepository:
             source.last_error = error
         await self.session.flush()
 
-    async def ensure_default_sources(self) -> list[Source]:
-        defaults = [
-            (
-                "Reuters Business",
-                "rss",
-                "https://feeds.reuters.com/reuters/businessNews",
-                "markets",
-            ),
-            (
-                "MarketWatch Top Stories",
-                "rss",
-                "https://feeds.marketwatch.com/marketwatch/topstories/",
-                "markets",
-            ),
-        ]
+    async def ensure_default_sources(
+        self,
+        defaults: Sequence[dict[str, object]] | None = None,
+    ) -> list[Source]:
         sources: list[Source] = []
-        for name, provider, external_account, category in defaults:
+        for item in defaults or []:
+            provider = str(item.get("provider") or "").strip().lower()
+            external_account = str(
+                item.get("external_account") or item.get("url") or item.get("feed_url") or ""
+            ).strip()
+            name = str(item.get("name") or external_account).strip()
+            if not provider or not external_account or not name:
+                continue
+            config = dict(item.get("config") or {})
+            if provider in {"rss", "twitter", "newsletter"} and "feed_url" not in config:
+                config["feed_url"] = str(item.get("feed_url") or external_account)
             sources.append(
                 await self.add_source(
                     name=name,
                     provider=provider,
                     external_account=external_account,
-                    category=category,
-                    config={"feed_url": external_account},
-                    fetch_mode="rss",
+                    category=str(item.get("category") or "markets"),
+                    config=config,
+                    fetch_mode=str(item.get("fetch_mode") or "rss"),
+                    trust_score=float(item.get("trust_score") or 0.5),
                 )
             )
         return sources

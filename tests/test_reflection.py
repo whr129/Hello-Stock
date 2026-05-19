@@ -28,16 +28,16 @@ def test_reflection_payload_normalizes_retry_args() -> None:
     decision = _decision_from_payload(
         {
             "verdict": "retry",
-            "reason": "stock request used search",
-            "corrected_intent": "stocks",
+            "reason": "research request used search",
+            "corrected_intent": "research",
             "corrected_args": ["aapl", "AAPL", " nvda "],
         }
     )
 
     assert decision == ReflectionDecision(
         verdict="retry",
-        reason="stock request used search",
-        corrected_intent="stocks",
+        reason="research request used search",
+        corrected_intent="research",
         corrected_args=["AAPL", "NVDA"],
     )
 

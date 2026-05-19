@@ -23,7 +23,6 @@ def register_handlers(application: Application) -> None:
     commands = [
         "start",
         "help",
-        "stocks",
         "sources",
         "addsource",
         "sourceconfig",

@@ -30,7 +30,7 @@ class NewsSubagent:
         if "help" in capabilities:
             return {
                 "response": (
-                    "I can route requests between market research, stock context, "
+                    "I can route requests between market research, "
                     "runtime inspection, and general web search. "
                     "Try /skills for the full command list, or ask a general question directly."
                 ),
@@ -51,7 +51,7 @@ class NewsSubagent:
             "response": (
                 "This assistant focuses on market-impact research, source management, "
                 "runtime inspection, and memory. Use /research, /candidates, /signals, "
-                "/stocks, /sources, or /skills."
+                "/sources, or /skills."
             ),
             "metadata": {"capability": "help"},
         }
@@ -95,7 +95,8 @@ class NewsSubagent:
                         "response": (
                             "Usage: /addsource <provider> <account-or-target>. "
                             "Examples: /addsource rss https://example.com/feed.xml, "
-                            "/addsource twitter @openai"
+                            "/addsource twitter @openai, "
+                            "/addsource newsletter example-newsletter"
                         ),
                         "metadata": {"capability": "source_admin"},
                     }
@@ -107,20 +108,22 @@ class NewsSubagent:
                         "metadata": {"capability": "source_admin"},
                     }
                 config = {"feed_url": external_account} if provider == "rss" else {}
+                fetch_mode = "rss" if provider in {"rss", "twitter", "newsletter"} else None
                 source = await repository.add_source(
                     name=external_account,
                     provider=provider,
                     external_account=external_account,
                     owner_user_id=user_id,
                     config=config,
-                    fetch_mode="rss" if provider == "rss" else None,
+                    fetch_mode=fetch_mode,
                 )
                 await session.commit()
+                warning = _source_config_warning(source.provider, source.config)
                 return {
                     "response": (
                         f"Added source {source.name} [{source.provider}] "
                         f"{source.external_account}. "
-                        "Use /sourceconfig if you need extra provider settings."
+                        f"{warning}"
                     ),
                     "metadata": {"capability": "source_admin"},
                 }
@@ -146,8 +149,9 @@ class NewsSubagent:
                         "metadata": {"capability": "source_admin"},
                     }
                 await session.commit()
+                warning = _source_config_warning(source.provider, source.config)
                 return {
-                    "response": f"Updated source {source.id} config {key}={value}.",
+                    "response": f"Updated source {source.id} config {key}={value}. {warning}",
                     "metadata": {"capability": "source_admin"},
                 }
 
@@ -197,11 +201,17 @@ class NewsSubagent:
                         "response": "Source not found.",
                         "metadata": {"capability": "source_admin"},
                     }
-                provider = self.ingest_registry.get(source.provider)
-                items = provider.fetch_items(
-                    source,
-                    timeout_seconds=self.settings.rss_fetch_timeout_seconds,
-                )
+                try:
+                    provider = self.ingest_registry.get(source.provider)
+                    items = provider.fetch_items(
+                        source,
+                        timeout_seconds=self.settings.rss_fetch_timeout_seconds,
+                    )
+                except ValueError as exc:
+                    return {
+                        "response": f"Source test failed: {exc}",
+                        "metadata": {"capability": "source_admin"},
+                    }
                 preview = "\n".join(f"- {item.title}" for item in items[:3]) or "- no items"
                 return {
                     "response": (
@@ -292,6 +302,23 @@ class NewsSubagent:
             "response": "Memory request could not be completed.",
             "metadata": {"capability": "memory_admin"},
         }
+
+
+def _source_config_warning(provider: str, config: dict | None) -> str:
+    normalized = provider.strip().lower()
+    if normalized == "rss":
+        return "RSS sources use the feed URL from /addsource or config.feed_url."
+    if normalized in {"twitter", "newsletter"} and not (config or {}).get("feed_url"):
+        return (
+            f"Set /sourceconfig <source-id> feed_url <rss-or-bridge-url> before fetching "
+            f"this {normalized} source."
+        )
+    if normalized == "twitter":
+        return "This X.com source is feed-backed; no official X API key is used."
+    if normalized == "newsletter":
+        return "This newsletter source is feed-backed."
+    return ""
+
 
 def _parse_source_id(value: str) -> int | None:
     try:

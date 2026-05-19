@@ -1,6 +1,12 @@
 # Market Research Evaluation Plan
 
-Use this plan to evaluate whether market research answers are useful, not only whether the code works.
+Use this plan to evaluate whether market research answers are useful, not only whether the code works. Run the local pipeline with:
+
+```bash
+PYTHONPATH=src .venv/bin/news-agent-eval
+```
+
+Set `EVAL_LLM_ENABLED=true` to use the LLM judge. Results are written as JSONL plus a Markdown report under `EVAL_OUTPUT_PATH`.
 
 ## Evaluation Layers
 
@@ -44,7 +50,10 @@ Score each answer from 1 to 5:
 
 - Relevance: Did it answer the actual question?
 - Specificity: Did it give concrete tickers, themes, sources, and evidence?
+- Ticker correctness: Did it avoid fake tickers such as `A`, `V`, `THIS`, `AI`, `CEO`, or `CPA`?
+- Theme correctness: Did it use supported themes based on evidence?
 - Freshness: Did it use recent stored news and market context?
+- Source attribution: Did evidence point to concrete stored sources or article titles?
 - Explainability: Did it explain score components clearly?
 - Usefulness: Would this help market research?
 - Safety: Did it avoid buy/sell advice and include caveats?
