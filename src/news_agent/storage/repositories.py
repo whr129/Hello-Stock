@@ -52,6 +52,75 @@ def build_source_locator(provider: str, external_account: str) -> str:
     return f"{normalized_provider}://{normalized_account}"
 
 
+def _isoformat(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _mention_evidence_payload(
+    mention: MarketMention,
+    article: Article | None,
+    source: Source | None,
+) -> dict[str, object]:
+    return {
+        "article_id": mention.article_id,
+        "summary_id": mention.summary_id,
+        "source_id": mention.source_id,
+        **_article_source_evidence_fields(article, source),
+        "text": mention.evidence_text or "",
+        "evidence_text": mention.evidence_text or "",
+        "source_family": mention.source_family,
+        "trust_score": mention.trust_score,
+        "created_at": _isoformat(mention.created_at),
+    }
+
+
+def _article_source_evidence_fields(
+    article: Article | None,
+    source: Source | None,
+) -> dict[str, object]:
+    return {
+        "article_title": article.title if article else None,
+        "article_url": article.url if article else None,
+        "published_at": _isoformat(article.published_at if article else None),
+        "article_created_at": _isoformat(article.created_at if article else None),
+        "source_name": source.name if source else None,
+        "source_provider": source.provider if source else None,
+    }
+
+
+def _select_preferred_signal_snapshots(
+    snapshots: list[MarketSignalSnapshot],
+    *,
+    limit: int,
+) -> list[MarketSignalSnapshot]:
+    latest_by_signal: dict[tuple[str | None, str | None], MarketSignalSnapshot] = {}
+    for snapshot in snapshots:
+        key = (snapshot.ticker, snapshot.theme)
+        current = latest_by_signal.get(key)
+        if current is None or _snapshot_preference(snapshot) > _snapshot_preference(current):
+            latest_by_signal[key] = snapshot
+    return sorted(
+        latest_by_signal.values(),
+        key=lambda snapshot: _snapshot_preference(snapshot),
+        reverse=True,
+    )[:limit]
+
+
+def _snapshot_preference(snapshot: MarketSignalSnapshot) -> tuple[int, datetime, float]:
+    return (
+        1 if _has_linked_evidence(snapshot) else 0,
+        snapshot.created_at or datetime.min.replace(tzinfo=UTC),
+        float(snapshot.total_score or 0.0),
+    )
+
+
+def _has_linked_evidence(snapshot: MarketSignalSnapshot) -> bool:
+    return any(
+        isinstance(item, dict) and bool(item.get("article_url"))
+        for item in snapshot.evidence or []
+    )
+
+
 class UserRepository:
     def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self.session = session
@@ -426,16 +495,24 @@ class MarketMentionRepository:
 
     async def aggregate(self, *, since: datetime) -> list[MentionAggregate]:
         result = await self.session.execute(
-            select(MarketMention)
+            select(MarketMention, Article, Source)
+            .outerjoin(Article, Article.id == MarketMention.article_id)
+            .outerjoin(Source, Source.id == MarketMention.source_id)
             .where(MarketMention.created_at >= since)
             .order_by(MarketMention.created_at.desc())
         )
         grouped: dict[tuple[str | None, str | None], list[MarketMention]] = {}
-        for mention in result.scalars():
+        evidence_by_mention_id: dict[int, dict[str, object]] = {}
+        for mention, article, source in result.all():
             key = (mention.ticker, mention.theme)
             if key == (None, None):
                 continue
             grouped.setdefault(key, []).append(mention)
+            evidence_by_mention_id[mention.id] = _mention_evidence_payload(
+                mention,
+                article,
+                source,
+            )
 
         aggregates: list[MentionAggregate] = []
         for (ticker, theme), mentions in grouped.items():
@@ -444,17 +521,7 @@ class MarketMentionRepository:
                 for mention in mentions
                 if mention.source_id or mention.source_family
             }
-            evidence = [
-                {
-                    "article_id": mention.article_id,
-                    "summary_id": mention.summary_id,
-                    "text": mention.evidence_text or "",
-                    "source_family": mention.source_family,
-                    "trust_score": mention.trust_score,
-                    "created_at": mention.created_at.isoformat() if mention.created_at else None,
-                }
-                for mention in mentions[:5]
-            ]
+            evidence = [evidence_by_mention_id[mention.id] for mention in mentions[:5]]
             trust_values = [mention.trust_score for mention in mentions]
             aggregates.append(
                 MentionAggregate(
@@ -538,12 +605,12 @@ class MarketSignalRepository:
             .where(MarketSignalSnapshot.window == window)
             .where(MarketSignalSnapshot.created_at >= since)
             .order_by(
-                MarketSignalSnapshot.total_score.desc(),
                 MarketSignalSnapshot.created_at.desc(),
+                MarketSignalSnapshot.total_score.desc(),
             )
-            .limit(limit)
+            .limit(max(limit * 10, 50))
         )
-        return list(result.scalars())
+        return _select_preferred_signal_snapshots(list(result.scalars()), limit=limit)
 
     async def fetch_signal_history(
         self,
@@ -555,9 +622,63 @@ class MarketSignalRepository:
             select(MarketSignalSnapshot)
             .where(MarketSignalSnapshot.ticker == ticker.upper())
             .order_by(MarketSignalSnapshot.created_at.desc())
+            .limit(max(limit * 10, 50))
+        )
+        return _select_preferred_signal_snapshots(list(result.scalars()), limit=limit)
+
+    async def backfill_evidence_links(self, *, limit: int = 500) -> int:
+        result = await self.session.execute(
+            select(MarketSignalSnapshot)
+            .order_by(MarketSignalSnapshot.created_at.desc())
             .limit(limit)
         )
-        return list(result.scalars())
+        snapshots = list(result.scalars())
+        article_ids = sorted(
+            {
+                int(item["article_id"])
+                for snapshot in snapshots
+                for item in snapshot.evidence or []
+                if isinstance(item, dict)
+                and item.get("article_id") is not None
+                and not item.get("article_url")
+            }
+        )
+        if not article_ids:
+            return 0
+        article_rows = await self.session.execute(
+            select(Article, Source)
+            .outerjoin(Source, Source.id == Article.source_id)
+            .where(Article.id.in_(article_ids))
+        )
+        article_context = {
+            article.id: (article, source)
+            for article, source in article_rows.all()
+        }
+        updated = 0
+        for snapshot in snapshots:
+            evidence = []
+            changed = False
+            for item in snapshot.evidence or []:
+                if not isinstance(item, dict):
+                    evidence.append(item)
+                    continue
+                enriched = dict(item)
+                article_id = enriched.get("article_id")
+                if article_id is not None and not enriched.get("article_url"):
+                    article, source = article_context.get(int(article_id), (None, None))
+                    if article:
+                        enriched = {
+                            **enriched,
+                            **_article_source_evidence_fields(article, source),
+                        }
+                        changed = True
+                evidence.append(enriched)
+            if changed:
+                snapshot.evidence = evidence
+                updated += 1
+        if updated:
+            await self.session.flush()
+        return updated
 
     async def delete_created_before(self, cutoff: datetime) -> int:
         result = await self.session.execute(
@@ -794,6 +915,15 @@ class RuntimeRunRepository:
         item.status = status
         item.summary = summary
         item.completed_at = datetime.now(UTC)
+        await self.session.flush()
+        return item
+
+    async def update_metadata(self, run_id: int, metadata: dict) -> RuntimeRun | None:
+        result = await self.session.execute(select(RuntimeRun).where(RuntimeRun.id == run_id))
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        item.run_metadata = {**dict(item.run_metadata or {}), **metadata}
         await self.session.flush()
         return item
 
@@ -1042,6 +1172,15 @@ class ConversationEventRepository:
             .where(ConversationEvent.id > after_event_id)
         )
         return int(result.scalar_one() or 0)
+
+    async def latest_user_chat_id(self) -> int | None:
+        result = await self.session.execute(
+            select(ConversationEvent.chat_id)
+            .where(ConversationEvent.role == "user")
+            .order_by(ConversationEvent.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def latest_event_id_for_user(self, user_id: int) -> int:
         result = await self.session.execute(

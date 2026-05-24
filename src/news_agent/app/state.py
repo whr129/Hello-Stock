@@ -16,6 +16,7 @@ Intent = Literal[
     "resetmemory",
     "runtime",
     "job",
+    "refreshreport",
     "trace",
     "step",
     "alerts",

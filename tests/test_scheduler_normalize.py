@@ -9,6 +9,7 @@ from news_agent.graph.nodes import (
     _related_tickers_for_title,
     _source_is_due,
 )
+from news_agent.ingestion.providers import NormalizedIngestItem
 from news_agent.settings import Settings
 
 
@@ -84,7 +85,9 @@ async def test_normalize_dedupe_saves_only_market_impact_articles(monkeypatch) -
 
     assert upserted_titles == ["Earnings beat sends shares higher"]
     assert result["metadata"]["saved_article_count"] == 1
+    assert result["metadata"]["accepted_article_count"] == 1
     assert result["metadata"]["rejected_article_count"] == 1
+    assert result["metadata"]["duplicate_article_count"] == 0
     assert len(result["metadata"]["market_impact_classifications"]) == 2
 
 
@@ -145,6 +148,113 @@ def test_default_sources_load_from_json_config() -> None:
             "feed_url": "https://www.sec.gov/news/pressreleases.rss",
             "category": "filings",
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_parallel_retries_source_and_records_metadata(monkeypatch) -> None:
+    calls = {"source": 0}
+    finished_steps: list[dict[str, object]] = []
+    fetch_results: list[dict[str, object]] = []
+
+    class FakeProvider:
+        def fetch_items(self, source, timeout_seconds: int):
+            del source, timeout_seconds
+            calls["source"] += 1
+            if calls["source"] == 1:
+                raise TimeoutError("temporary source failure")
+            return [
+                NormalizedIngestItem(
+                    external_id="1",
+                    url="https://example.com/a",
+                    title="AAPL raises guidance",
+                    body_text="Revenue improved.",
+                    published_at=None,
+                    author=None,
+                    raw_payload={},
+                    provider="rss",
+                    account="example",
+                    metadata={},
+                )
+            ]
+
+    class FakeRegistry:
+        def get(self, provider: str):
+            assert provider == "rss"
+            return FakeProvider()
+
+    class FakeTraceService:
+        async def start_step(self, **kwargs):
+            del kwargs
+            return 10
+
+        async def finish_step(self, step_id, **kwargs):
+            finished_steps.append({"step_id": step_id, **kwargs})
+
+        async def record_error(self, **kwargs):
+            del kwargs
+            return 1
+
+    class FakeSourceRepository:
+        def __init__(self, session) -> None:
+            del session
+
+        async def mark_fetch_result(self, *args, **kwargs):
+            fetch_results.append({"args": args, **kwargs})
+
+    monkeypatch.setattr("news_agent.graph.nodes.SourceRepository", FakeSourceRepository)
+
+    node = SchedulerNodes.__new__(SchedulerNodes)
+    node.settings = Settings(
+        openai_api_key="",
+        source_fetch_max_attempts=2,
+        source_fetch_retry_backoff_seconds=0,
+        market_fetch_max_attempts=1,
+    )
+    node.ingest_registry = FakeRegistry()
+    node.trace_service = FakeTraceService()
+    node.session_factory = lambda: _FakeSessionContext()
+
+    result = await node.fetch_parallel(
+        {
+            "runtime_run_id": 99,
+            "active_step_id": 1,
+            "job_type": "market_research_refresh",
+            "due_sources": [
+                {
+                    "id": 1,
+                    "name": "Example",
+                    "url": "https://example.com/feed.xml",
+                    "provider": "rss",
+                    "external_account": "https://example.com/feed.xml",
+                    "config": {},
+                    "field_mapping": {},
+                    "fetch_mode": "rss",
+                    "enabled": True,
+                    "trust_score": 0.5,
+                    "last_fetched_at": None,
+                    "last_success_at": None,
+                    "last_error": None,
+                    "category": "markets",
+                }
+            ],
+            "due_tickers": [],
+            "errors": [],
+            "metadata": {"fetch_metrics": {"sources": {"due": 1}, "tickers": {}, "retry_count": 0}},
+        }
+    )
+
+    metrics = result["metadata"]["fetch_metrics"]
+    assert calls["source"] == 2
+    assert metrics["retry_count"] == 1
+    assert metrics["sources"]["succeeded"] == 1
+    assert metrics["sources"]["items_fetched"] == 1
+    assert result["metadata"]["provider_counts"] == {"rss": 1}
+    assert fetch_results[0]["success"] is True
+    assert finished_steps[0]["metadata"]["retry_count"] == 1
+    assert [attempt["status"] for attempt in finished_steps[0]["metadata"]["attempts"]] == [
+        "failed",
+        "completed",
     ]
 
 

@@ -114,6 +114,10 @@ async def prune_market_research_data(session: AsyncSession, settings: Settings) 
     return mention_count + signal_count
 
 
+async def backfill_signal_evidence_links(session: AsyncSession, *, limit: int = 500) -> int:
+    return await MarketSignalRepository(session).backfill_evidence_links(limit=limit)
+
+
 def _to_model(mention) -> MarketMention:
     return MarketMention(
         ticker=mention.ticker,

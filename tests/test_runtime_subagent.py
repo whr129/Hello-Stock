@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from news_agent.domains.runtime.subagent import (
     _extract_error_query,
     _extract_run_id_from_text,
+    _format_refresh_report,
     _format_trace,
     _is_generic_error_query,
     _wants_trace_detail,
@@ -77,3 +78,22 @@ def test_format_trace_includes_full_recorded_flow_metadata_and_errors() -> None:
     assert "- #680 semantic_memory_search [tool] failed 12ms" in trace
     assert 'metadata: {"user_id":1}' in trace
     assert "Errors:" in trace
+
+
+def test_format_refresh_report_returns_stored_report_text() -> None:
+    run = SimpleNamespace(
+        id=12,
+        run_metadata={
+            "refresh_report": {
+                "text": "Refresh report: run 12\n- Source health: healthy 1",
+            }
+        },
+    )
+
+    assert _format_refresh_report(run) == "Refresh report: run 12\n- Source health: healthy 1"
+
+
+def test_format_refresh_report_handles_missing_report() -> None:
+    run = SimpleNamespace(id=13, run_metadata={})
+
+    assert _format_refresh_report(run) == "No refresh report stored for run 13."

@@ -37,6 +37,18 @@ class RuntimeSubagent:
             step_repo = RuntimeStepRepository(session)
             error_repo = RuntimeErrorRepository(session)
 
+            if command == "/refreshreport":
+                run_id = _parse_run_id(args[:1])
+                if run_id is None:
+                    runs = await _latest_refresh_runs(run_repo, current_run_id, limit=1)
+                    if not runs:
+                        return _response("No refresh history found yet.")
+                    run_id = runs[0].id
+                run = await run_repo.get(run_id)
+                if run is None:
+                    return _response("Run not found.")
+                return _response(_format_refresh_report(run))
+
             if command == "/job":
                 run_id = _parse_run_id(args[:1])
                 if run_id is None:
@@ -70,18 +82,20 @@ class RuntimeSubagent:
                     return _response("Step not found for that run.")
                 return _response(_format_step(run_id, step))
 
+            if "refresh report" in message_text.lower():
+                requested_run_id = _extract_run_id_from_text(message_text)
+                if requested_run_id is None:
+                    runs = await _latest_refresh_runs(run_repo, current_run_id, limit=1)
+                    if not runs:
+                        return _response("No refresh history found yet.")
+                    requested_run_id = runs[0].id
+                run = await run_repo.get(requested_run_id)
+                if run is None:
+                    return _response("Run not found.")
+                return _response(_format_refresh_report(run))
+
             if "last refresh" in message_text.lower():
-                runs = await run_repo.list_recent(
-                    limit=1,
-                    workflow="manual_refresh",
-                    exclude_run_id=current_run_id,
-                )
-                if not runs:
-                    runs = await run_repo.list_recent(
-                        limit=1,
-                        workflow="news_refresh",
-                        exclude_run_id=current_run_id,
-                    )
+                runs = await _latest_refresh_runs(run_repo, current_run_id, limit=1)
                 if not runs:
                     return _response("No refresh history found yet.")
                 steps = await step_repo.list_for_run(runs[0].id)
@@ -172,6 +186,7 @@ def _format_runs(runs: list) -> str:
 
 
 def _format_run(run, steps: list, errors: list) -> str:
+    refresh_report = _refresh_report_for_run(run)
     lines = [
         f"Run {run.id}\n"
         f"- Workflow: {run.workflow}\n"
@@ -180,6 +195,8 @@ def _format_run(run, steps: list, errors: list) -> str:
         f"- Steps: {len(steps)}\n"
         f"- Summary: {run.summary or 'n/a'}"
     ]
+    if refresh_report:
+        lines.append(f"- Refresh report: /refreshreport {run.id}")
     if errors:
         lines.append(f"- First error: {errors[0].step_name}: {errors[0].error_message}")
         lines.append(f"- Debug: /trace {run.id} or /step {run.id} {errors[0].step_name}")
@@ -262,6 +279,22 @@ def _format_errors(errors: list) -> str:
     return "\n".join(lines)
 
 
+def _format_refresh_report(run) -> str:
+    report = _refresh_report_for_run(run)
+    if not report:
+        return f"No refresh report stored for run {run.id}."
+    text = str(report.get("text") or "").strip()
+    if text:
+        return text
+    return json.dumps(report, sort_keys=True, separators=(",", ":"))[:2000]
+
+
+def _refresh_report_for_run(run) -> dict | None:
+    metadata = dict(getattr(run, "run_metadata", None) or {})
+    report = metadata.get("refresh_report")
+    return report if isinstance(report, dict) else None
+
+
 def _compact_metadata(metadata: dict | None) -> str:
     payload = dict(metadata or {})
     if not payload:
@@ -298,17 +331,13 @@ def _is_generic_error_query(query: str) -> bool:
 
 
 async def _latest_refresh_errors(run_repo, error_repo, current_run_id: int | None):
-    runs = await run_repo.list_recent(
-        limit=1,
-        workflow="manual_refresh",
-        exclude_run_id=current_run_id,
-    )
-    if not runs:
-        runs = await run_repo.list_recent(
-            limit=1,
-            workflow="news_refresh",
-            exclude_run_id=current_run_id,
-        )
+    runs = await _latest_refresh_runs(run_repo, current_run_id, limit=1)
     if not runs:
         return []
     return await error_repo.list_for_run(runs[0].id)
+
+
+async def _latest_refresh_runs(run_repo, current_run_id: int | None, *, limit: int):
+    runs = await run_repo.list_recent(limit=25, exclude_run_id=current_run_id)
+    refresh_workflows = {"market_research_refresh", "manual_refresh", "news_refresh", "scheduler"}
+    return [run for run in runs if run.workflow in refresh_workflows][:limit]

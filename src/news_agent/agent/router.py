@@ -16,6 +16,7 @@ COMMAND_INTENTS: dict[str, Intent] = {
     "/resetmemory": "resetmemory",
     "/runtime": "runtime",
     "/job": "job",
+    "/refreshreport": "refreshreport",
     "/trace": "trace",
     "/step": "step",
     "/alerts": "alerts",
@@ -73,6 +74,7 @@ def skills_response() -> str:
         "Runtime debugging\n"
         "- /runtime\n"
         "- /job <run-id>\n"
+        "- /refreshreport [run-id]\n"
         "- /trace <run-id>\n"
         "- /step <run-id> <step-name>\n"
         "- /alerts\n"
@@ -117,7 +119,7 @@ def route_request(
         return RouteDecision(agents=("news",), capabilities=("scheduler_admin",))
     if intent in {"memory", "forget", "resetmemory"}:
         return RouteDecision(agents=("news",), capabilities=("memory_admin",))
-    if intent in {"runtime", "job", "trace", "step"}:
+    if intent in {"runtime", "job", "refreshreport", "trace", "step"}:
         return RouteDecision(agents=("runtime",), capabilities=("runtime_inspection",))
     if intent == "alerts":
         return RouteDecision(agents=("runtime",), capabilities=("runtime_alerts",))
@@ -172,6 +174,7 @@ def _looks_like_runtime_query(message_text: str) -> bool:
         phrase in lowered
         for phrase in (
             "last refresh",
+            "refresh report",
             "during refresh",
             "calling history",
             "call history",
