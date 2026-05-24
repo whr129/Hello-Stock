@@ -7,7 +7,7 @@ This is the current product surface for the Telegram assistant. The bot is a mar
 - `/research`, `/candidates`, `/signals <ticker>`, and `/researchstatus`.
 - `/sources`, `/addsource`, `/sourceconfig`, `/sourcefields`, `/sourcetest`, and `/removesource`.
 - `/refresh` for manual scheduler runs.
-- `/runtime`, `/job`, `/trace`, `/step`, and `/alerts`.
+- `/runtime`, `/job`, `/refreshreport`, `/trace`, `/step`, and `/alerts`.
 - `/memory`, `/forget`, `/resetmemory`, `/help`, and `/skills`.
 - General web search as external context for broad factual questions or missing market background.
 
@@ -29,6 +29,8 @@ This is the current product surface for the Telegram assistant. The bot is a mar
 - `graph/scheduler_graph.py` runs source fetch, market snapshot refresh, normalization, embeddings, summaries, mention extraction, scoring, and cleanup.
 - `memory/` keeps 30-day short-term session state and async long-term memory consolidation.
 - `storage/` keeps market entities, mentions, signal snapshots, theme memories, source/article/summary/embedding data, runtime records, jobs, and memories.
+- Refresh observability, reporting, and retry behavior are described in [Refresh Observability and Retry Refactor](refresh-observability-refactor.md).
+- Research answer grounding and source-link rules are described in [Evidence Grounding](evidence-grounding.md).
 
 ## Ingestion Sources
 

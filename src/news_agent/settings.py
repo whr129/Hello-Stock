@@ -121,6 +121,17 @@ class Settings(BaseSettings):
     default_sources_json: str = Field(default="[]", alias="DEFAULT_SOURCES_JSON")
     source_max_items_per_fetch: int = Field(default=50, alias="SOURCE_MAX_ITEMS_PER_FETCH")
     source_max_item_age_hours: int = Field(default=72, alias="SOURCE_MAX_ITEM_AGE_HOURS")
+    source_fetch_max_attempts: int = Field(default=3, alias="SOURCE_FETCH_MAX_ATTEMPTS")
+    source_fetch_retry_backoff_seconds: int = Field(
+        default=2,
+        alias="SOURCE_FETCH_RETRY_BACKOFF_SECONDS",
+    )
+    market_fetch_max_attempts: int = Field(default=2, alias="MARKET_FETCH_MAX_ATTEMPTS")
+    market_fetch_retry_backoff_seconds: int = Field(
+        default=2,
+        alias="MARKET_FETCH_RETRY_BACKOFF_SECONDS",
+    )
+    refresh_report_enabled: bool = Field(default=True, alias="REFRESH_REPORT_ENABLED")
     signal_retention_days: int = Field(default=30, alias="SIGNAL_RETENTION_DAYS")
     signal_alert_threshold: float = Field(default=75.0, alias="SIGNAL_ALERT_THRESHOLD")
     signal_alert_cooldown_minutes: int = Field(

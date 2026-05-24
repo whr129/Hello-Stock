@@ -49,10 +49,9 @@ class ResearchSubagent:
 
         if plan.command == "/researchstatus":
             async with self.session_factory() as session:
-                runs = await RuntimeRunRepository(session).list_recent(
-                    limit=5,
-                    workflow="market_research",
-                )
+                recent_runs = await RuntimeRunRepository(session).list_recent(limit=20)
+                workflows = {"market_research", "market_research_refresh", "manual_refresh"}
+                runs = [run for run in recent_runs if run.workflow in workflows][:5]
             return {
                 "response": format_research_status(runs),
                 "metadata": {"capability": "market_research", "plan": plan.task_type},

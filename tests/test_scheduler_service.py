@@ -11,6 +11,16 @@ def test_parse_config_value_coerces_primitives() -> None:
     assert parse_config_value("feed") == "feed"
 
 
+def test_refresh_retry_settings_have_defaults() -> None:
+    settings = Settings(openai_api_key="")
+
+    assert settings.source_fetch_max_attempts == 3
+    assert settings.source_fetch_retry_backoff_seconds == 2
+    assert settings.market_fetch_max_attempts == 2
+    assert settings.market_fetch_retry_backoff_seconds == 2
+    assert settings.refresh_report_enabled is True
+
+
 def test_format_refresh_summary_includes_provider_counts() -> None:
     service = SchedulerControlService(Settings(openai_api_key=""))
     summary = RefreshSummary(

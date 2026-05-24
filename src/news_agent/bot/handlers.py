@@ -35,6 +35,7 @@ def register_handlers(application: Application) -> None:
         "resetmemory",
         "runtime",
         "job",
+        "refreshreport",
         "trace",
         "step",
         "alerts",

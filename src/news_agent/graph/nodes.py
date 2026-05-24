@@ -15,11 +15,13 @@ from news_agent.ingestion.providers import IngestProviderRegistry
 from news_agent.markets.yahoo import YahooMarketDataProvider
 from news_agent.memory.embeddings import EmbeddingService
 from news_agent.observability.runtime import (
+    RefreshReportService,
     RuntimeAlertService,
     RuntimeTraceService,
     summarize_run_state,
 )
 from news_agent.research.scheduler import (
+    backfill_signal_evidence_links,
     extract_market_mentions,
     prune_market_research_data,
     score_market_signals,
@@ -69,6 +71,7 @@ class SchedulerNodes:
         self.market_impact_classifier = MarketImpactClassifier(settings)
         self.trace_service = RuntimeTraceService(session_factory, settings)
         self.alert_service = RuntimeAlertService(session_factory, settings)
+        self.report_service = RefreshReportService(session_factory, settings)
 
     def traced(self, step_name: str, func):
         async def wrapped(state: SchedulerState) -> SchedulerState:
@@ -107,6 +110,17 @@ class SchedulerNodes:
                     metadata={"job_id": state.get("job_id", 0)},
                 )
                 await self.trace_service.finish_run(run_id, status="failed", summary=message[:500])
+                if _is_refresh_workflow(workflow):
+                    failed_state = {
+                        **state,
+                        "runtime_run_id": run_id,
+                        "errors": [*list(state.get("errors", [])), message],
+                    }
+                    await self.report_service.record_and_deliver(
+                        run_id=run_id,
+                        status="failed",
+                        state=failed_state,
+                    )
                 await self.alert_service.send_alert(
                     run_id=run_id,
                     error_id=error_id,
@@ -129,6 +143,12 @@ class SchedulerNodes:
                     status=status,
                     summary=summarize_run_state(workflow, result),
                 )
+                if _is_refresh_workflow(workflow):
+                    await self.report_service.record_and_deliver(
+                        run_id=run_id,
+                        status=status,
+                        state=result,
+                    )
                 if result.get("errors"):
                     await self.alert_service.send_alert(
                         run_id=run_id,
@@ -166,12 +186,73 @@ class SchedulerNodes:
         logger.info("scheduler finished %s in %.2fs", label, elapsed)
         return result
 
+    async def _run_with_retries(
+        self,
+        *,
+        label: str,
+        func,
+        timeout_seconds: int,
+        max_attempts: int,
+        backoff_seconds: int,
+        attempts: list[dict[str, Any]],
+    ):
+        max_attempts = max(max_attempts, 1)
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            started_at = perf_counter()
+            try:
+                result = await self._run_blocking_with_timeout(
+                    label=f"{label} attempt={attempt}",
+                    func=func,
+                    timeout_seconds=timeout_seconds,
+                )
+            except Exception as exc:
+                elapsed_ms = max(int((perf_counter() - started_at) * 1000), 0)
+                last_error = exc
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "status": "failed",
+                        "duration_ms": elapsed_ms,
+                        "error": str(exc),
+                    }
+                )
+                logger.warning(
+                    "scheduler provider attempt failed "
+                    "label=%s attempt=%s max_attempts=%s error=%s",
+                    label,
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+                if attempt < max_attempts:
+                    sleep_seconds = max(backoff_seconds, 0) * attempt
+                    attempts[-1]["backoff_seconds"] = sleep_seconds
+                    if sleep_seconds:
+                        await asyncio.sleep(sleep_seconds)
+                continue
+
+            elapsed_ms = max(int((perf_counter() - started_at) * 1000), 0)
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "status": "completed",
+                    "duration_ms": elapsed_ms,
+                }
+            )
+            return result
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"{label} failed without an exception")
+
     async def load_due_sources(self, state: SchedulerState) -> SchedulerState:
         job_type = state.get("job_type", "market_research_refresh")
         logger.info("scheduler loading due work", extra={"job_type": job_type})
         async with self.session_factory() as session:
             source_repo = SourceRepository(session)
             sources = await source_repo.list_all_enabled()
+            enabled_source_count = len(sources)
             if not sources:
                 default_sources = _default_sources_from_settings(self.settings)
                 if default_sources:
@@ -180,6 +261,7 @@ class SchedulerNodes:
                         extra={"source_count": len(default_sources)},
                     )
                     sources = await source_repo.ensure_default_sources(default_sources)
+                    enabled_source_count = len(sources)
             sources = [source for source in sources if _source_is_due(source, self.settings)]
             tickers = await self._market_universe_symbols(session)
             job = await JobRepository(session).start(job_type)
@@ -218,6 +300,19 @@ class SchedulerNodes:
             "due_sources": due_sources,
             "due_tickers": tickers,
             "errors": state.get("errors", []),
+            "metadata": {
+                **state.get("metadata", {}),
+                "fetch_metrics": {
+                    "sources": {
+                        "enabled": enabled_source_count,
+                        "due": len(due_sources),
+                        "skipped": max(enabled_source_count - len(due_sources), 0),
+                    },
+                    "tickers": {"due": len(tickers)},
+                    "retry_count": 0,
+                    "failures": [],
+                },
+            },
         }
 
     async def _market_universe_symbols(self, session) -> list[str]:
@@ -237,6 +332,18 @@ class SchedulerNodes:
         fetched_articles: list[dict[str, Any]] = []
         errors = list(state.get("errors", []))
         provider_counts: dict[str, int] = {}
+        metadata = dict(state.get("metadata") or {})
+        fetch_metrics = _ensure_fetch_metrics(metadata)
+        source_metrics = fetch_metrics["sources"]
+        ticker_metrics = fetch_metrics["tickers"]
+        source_metrics["attempted"] = 0
+        source_metrics["succeeded"] = 0
+        source_metrics["failed"] = 0
+        source_metrics["items_fetched"] = 0
+        source_metrics["health"] = dict(source_metrics.get("health") or {})
+        ticker_metrics["attempted"] = 0
+        ticker_metrics["succeeded"] = 0
+        ticker_metrics["failed"] = 0
         logger.info(
             "scheduler fetching feeds",
             extra={"source_count": len(state.get("due_sources", []))},
@@ -244,6 +351,8 @@ class SchedulerNodes:
 
         for source in state.get("due_sources", []):
             provider_step_id: int | None = None
+            source_metrics["attempted"] += 1
+            attempts: list[dict[str, Any]] = []
             try:
                 provider_step_id = await self.trace_service.start_step(
                     run_id=state["runtime_run_id"],
@@ -261,15 +370,23 @@ class SchedulerNodes:
                 )
                 provider = self.ingest_registry.get(source["provider"])
                 source_payload = dict(source)
-                articles = await self._run_blocking_with_timeout(
+                articles = await self._run_with_retries(
                     label=f"source source={source['name']}",
+                    attempts=attempts,
+                    max_attempts=self.settings.source_fetch_max_attempts,
+                    backoff_seconds=self.settings.source_fetch_retry_backoff_seconds,
+                    timeout_seconds=self.settings.rss_fetch_timeout_seconds + 2,
                     func=lambda payload=source_payload, provider=provider: provider.fetch_items(
                         _source_dict_to_model(payload),
                         timeout_seconds=self.settings.rss_fetch_timeout_seconds,
                     ),
-                    timeout_seconds=self.settings.rss_fetch_timeout_seconds + 2,
                 )
                 articles = _limit_articles_for_source(source, articles, self.settings)
+                retry_count = max(len(attempts) - 1, 0)
+                fetch_metrics["retry_count"] += retry_count
+                source_metrics["succeeded"] += 1
+                source_metrics["items_fetched"] += len(articles)
+                source_metrics["health"][source["name"]] = "empty" if not articles else "healthy"
                 provider_counts[source["provider"]] = provider_counts.get(
                     source["provider"],
                     0,
@@ -277,7 +394,11 @@ class SchedulerNodes:
                 await self.trace_service.finish_step(
                     provider_step_id,
                     status="completed",
-                    metadata={"article_count": len(articles)},
+                    metadata={
+                        "article_count": len(articles),
+                        "attempts": attempts,
+                        "retry_count": retry_count,
+                    },
                 )
                 logger.info(
                     "scheduler fetched source source=%s articles=%s",
@@ -307,11 +428,24 @@ class SchedulerNodes:
                     )
                     await session.commit()
             except Exception as exc:
+                retry_count = max(len(attempts) - 1, 0)
+                fetch_metrics["retry_count"] += retry_count
+                source_metrics["failed"] += 1
+                failure = {
+                    "kind": "source",
+                    "name": source["name"],
+                    "provider": source["provider"],
+                    "attempt_count": len(attempts),
+                    "error": str(exc),
+                }
+                fetch_metrics["failures"].append(failure)
+                source_metrics["health"][source["name"]] = "failing"
                 if provider_step_id is not None:
                     await self.trace_service.finish_step(
                         provider_step_id,
                         status="failed",
                         error_message=str(exc),
+                        metadata={"attempts": attempts, "retry_count": retry_count},
                     )
                     await self.trace_service.record_error(
                         run_id=state["runtime_run_id"],
@@ -343,6 +477,8 @@ class SchedulerNodes:
         )
         for ticker in state.get("due_tickers", []):
             provider_step_id: int | None = None
+            ticker_metrics["attempted"] += 1
+            attempts: list[dict[str, Any]] = []
             try:
                 provider_step_id = await self.trace_service.start_step(
                     run_id=state["runtime_run_id"],
@@ -358,11 +494,17 @@ class SchedulerNodes:
                     self.settings.market_fetch_timeout_seconds,
                 )
                 ticker_symbol = ticker
-                snapshot = await self._run_blocking_with_timeout(
+                snapshot = await self._run_with_retries(
                     label=f"ticker ticker={ticker}",
-                    func=lambda symbol=ticker_symbol: self.market_provider.get_snapshot(symbol),
+                    attempts=attempts,
+                    max_attempts=self.settings.market_fetch_max_attempts,
+                    backoff_seconds=self.settings.market_fetch_retry_backoff_seconds,
                     timeout_seconds=self.settings.market_fetch_timeout_seconds,
+                    func=lambda symbol=ticker_symbol: self.market_provider.get_snapshot(symbol),
                 )
+                retry_count = max(len(attempts) - 1, 0)
+                fetch_metrics["retry_count"] += retry_count
+                ticker_metrics["succeeded"] += 1
                 market_snapshots.append(
                     {
                         "symbol": snapshot.symbol,
@@ -374,7 +516,11 @@ class SchedulerNodes:
                 await self.trace_service.finish_step(
                     provider_step_id,
                     status="completed",
-                    metadata={"symbol": snapshot.symbol},
+                    metadata={
+                        "symbol": snapshot.symbol,
+                        "attempts": attempts,
+                        "retry_count": retry_count,
+                    },
                 )
                 logger.info(
                     "scheduler fetched ticker ticker=%s price=%s percent_change=%s",
@@ -383,11 +529,22 @@ class SchedulerNodes:
                     snapshot.percent_change,
                 )
             except Exception as exc:
+                retry_count = max(len(attempts) - 1, 0)
+                fetch_metrics["retry_count"] += retry_count
+                ticker_metrics["failed"] += 1
+                failure = {
+                    "kind": "ticker",
+                    "name": ticker,
+                    "attempt_count": len(attempts),
+                    "error": str(exc),
+                }
+                fetch_metrics["failures"].append(failure)
                 if provider_step_id is not None:
                     await self.trace_service.finish_step(
                         provider_step_id,
                         status="failed",
                         error_message=str(exc),
+                        metadata={"attempts": attempts, "retry_count": retry_count},
                     )
                     await self.trace_service.record_error(
                         run_id=state["runtime_run_id"],
@@ -417,7 +574,11 @@ class SchedulerNodes:
             "fetched_articles": fetched_articles,
             "market_snapshots": market_snapshots,
             "errors": errors,
-            "metadata": {**state.get("metadata", {}), "provider_counts": provider_counts},
+            "metadata": {
+                **metadata,
+                "fetch_metrics": fetch_metrics,
+                "provider_counts": provider_counts,
+            },
         }
 
     async def normalize_dedupe(self, state: SchedulerState) -> SchedulerState:
@@ -430,7 +591,10 @@ class SchedulerNodes:
         )
         saved_articles: list[dict[str, Any]] = []
         due_tickers = {ticker.upper() for ticker in state.get("due_tickers", [])}
+        accepted_article_count = 0
         rejected_article_count = 0
+        duplicate_article_count = 0
+        source_quality: dict[str, dict[str, int]] = {}
         classification_metadata: list[dict[str, Any]] = []
 
         async with self.session_factory() as session:
@@ -440,6 +604,12 @@ class SchedulerNodes:
             for item in state.get("fetched_articles", []):
                 title = item["title"]
                 text = item.get("summary") or ""
+                source_name = item.get("source_name") or "unknown"
+                quality = source_quality.setdefault(
+                    source_name,
+                    {"fetched": 0, "accepted": 0, "rejected": 0, "saved": 0, "duplicates": 0},
+                )
+                quality["fetched"] += 1
                 classification = await self.market_impact_classifier.classify(
                     title=title,
                     text=text,
@@ -456,7 +626,10 @@ class SchedulerNodes:
                 )
                 if not classification.accepted:
                     rejected_article_count += 1
+                    quality["rejected"] += 1
                     continue
+                accepted_article_count += 1
+                quality["accepted"] += 1
                 related_tickers = _related_tickers_for_title(title, due_tickers)
                 article, created = await article_repo.upsert_article(
                     source_id=item["source_id"],
@@ -470,6 +643,7 @@ class SchedulerNodes:
                     related_tickers=related_tickers,
                 )
                 if created:
+                    quality["saved"] += 1
                     saved_articles.append(
                         {
                             "id": article.id,
@@ -478,6 +652,9 @@ class SchedulerNodes:
                             "text": article.extracted_text or article.title,
                         }
                     )
+                else:
+                    duplicate_article_count += 1
+                    quality["duplicates"] += 1
 
             for snapshot in state.get("market_snapshots", []):
                 await market_repo.save_snapshot(
@@ -489,10 +666,22 @@ class SchedulerNodes:
 
             await session.commit()
 
+        metadata = dict(state.get("metadata", {}))
+        fetch_metrics = _ensure_fetch_metrics(metadata)
+        source_health = fetch_metrics["sources"].setdefault("health", {})
+        for source_name, quality in source_quality.items():
+            if quality["fetched"] > 0 and quality["accepted"] == 0:
+                source_health[source_name] = "low_signal"
+            elif quality["fetched"] > 0 and quality["saved"] == 0 and quality["duplicates"] > 0:
+                source_health[source_name] = "low_signal"
         metadata = {
             **state.get("metadata", {}),
+            "fetch_metrics": fetch_metrics,
             "saved_article_count": len(saved_articles),
+            "accepted_article_count": accepted_article_count,
             "rejected_article_count": rejected_article_count,
+            "duplicate_article_count": duplicate_article_count,
+            "source_quality": source_quality,
             "market_impact_classifications": classification_metadata[:50],
             "market_snapshot_count": len(state.get("market_snapshots", [])),
         }
@@ -608,9 +797,14 @@ class SchedulerNodes:
 
     async def score_signals(self, state: SchedulerState) -> SchedulerState:
         async with self.session_factory() as session:
+            backfilled = await backfill_signal_evidence_links(session)
             count = await score_market_signals(session, self.settings)
             await session.commit()
-        metadata = {**state.get("metadata", {}), "signal_count": count}
+        metadata = {
+            **state.get("metadata", {}),
+            "signal_count": count,
+            "signal_evidence_backfill_count": backfilled,
+        }
         return {**state, "metadata": metadata}
 
     async def cleanup_market_research(self, state: SchedulerState) -> SchedulerState:
@@ -722,3 +916,18 @@ def _related_tickers_for_title(title: str, due_tickers: set[str]) -> list[str]:
         if re.search(rf"(?<![A-Za-z0-9$]){re.escape(ticker)}(?![A-Za-z0-9])", title):
             matches.append(ticker)
     return matches
+
+
+def _is_refresh_workflow(workflow: str) -> bool:
+    return workflow in {"market_research_refresh", "manual_refresh", "news_refresh", "scheduler"}
+
+
+def _ensure_fetch_metrics(metadata: dict[str, Any]) -> dict[str, Any]:
+    metrics = dict(metadata.get("fetch_metrics") or {})
+    sources = dict(metrics.get("sources") or {})
+    tickers = dict(metrics.get("tickers") or {})
+    metrics["sources"] = sources
+    metrics["tickers"] = tickers
+    metrics["retry_count"] = int(metrics.get("retry_count", 0) or 0)
+    metrics["failures"] = list(metrics.get("failures") or [])
+    return metrics

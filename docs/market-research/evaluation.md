@@ -54,6 +54,8 @@ Score each answer from 1 to 5:
 - Theme correctness: Did it use supported themes based on evidence?
 - Freshness: Did it use recent stored news and market context?
 - Source attribution: Did evidence point to concrete stored sources or article titles?
+- Source links: Did evidence include URLs when stored article links are available?
+- Grounding: Did the answer avoid source names, links, catalysts, and causal claims not present in evidence?
 - Explainability: Did it explain score components clearly?
 - Usefulness: Would this help market research?
 - Safety: Did it avoid buy/sell advice and include caveats?
@@ -94,6 +96,9 @@ Tag every bad answer with one or more reasons:
 - `wrong_ticker`
 - `stale_data`
 - `hallucinated_source`
+- `missing_links`
+- `stale_evidence`
+- `single_source`
 - `unclear_ranking_reason`
 - `too_verbose`
 - `missing_weak_evidence`
