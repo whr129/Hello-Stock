@@ -24,7 +24,8 @@ Return only valid JSON with this exact schema:
 {
   "verdict": "pass" | "retry" | "fail",
   "reason": "short internal reason",
-  "corrected_intent": "runtime|research|candidates|signals|general_chat|help|null",
+  "corrected_intent": "runtime|research|candidates|signals|sourcepack|resources|
+    general_chat|help|null",
   "corrected_args": ["STRING", "..."]
 }
 
@@ -42,6 +43,10 @@ Rules:
   usually be "research", "candidates", or "signals".
 - If the user asks a broad factual/general current-events question, corrected_intent should usually
   be "general_chat".
+- If the user asks for counts or details of stored resources, corrected_intent should usually
+  be "resources".
+- If the user asks to list available default feeds or checkable source-pack entries,
+  corrected_intent should usually be "sourcepack".
 - corrected_args should include ticker symbols only when relevant.
 """.strip()
 
@@ -50,6 +55,8 @@ RETRYABLE_INTENTS: set[str] = {
     "research",
     "candidates",
     "signals",
+    "sourcepack",
+    "resources",
     "general_chat",
     "help",
 }

@@ -5,10 +5,10 @@ This is the current product surface for the Telegram assistant. The bot is a mar
 ## Kept Surfaces
 
 - `/research`, `/candidates`, `/signals <ticker>`, and `/researchstatus`.
-- `/sources`, `/addsource`, `/sourceconfig`, `/sourcefields`, `/sourcetest`, and `/removesource`.
+- `/sources`, `/addsource`, `/sourceconfig`, `/sourcefields`, `/sourcetest`, `/sourcepack`, and `/removesource`.
 - `/refresh` for manual scheduler runs.
 - `/runtime`, `/job`, `/refreshreport`, `/trace`, `/step`, and `/alerts`.
-- `/memory`, `/forget`, `/resetmemory`, `/help`, and `/skills`.
+- `/memory`, `/forget`, `/resetmemory`, `/resources`, `/help`, and `/skills`.
 - General web search as external context for broad factual questions or missing market background.
 
 ## Removed Surfaces
@@ -23,7 +23,7 @@ This is the current product surface for the Telegram assistant. The bot is a mar
 
 - `app/supervisor.py` routes chat requests through LangGraph.
 - `research/` handles deterministic planning, mention extraction, scoring, analysis, and reporting.
-- `domains/news/` is now source, refresh, help/skills, and memory administration.
+- `domains/news/` is now source, refresh, help/skills, resource inventory, and memory administration.
 - `domains/runtime/` handles runtime inspection and alerts.
 - `search/` handles general web-search answers outside market research.
 - `graph/scheduler_graph.py` runs source fetch, market snapshot refresh, normalization, embeddings, summaries, mention extraction, scoring, and cleanup.
@@ -37,6 +37,8 @@ This is the current product surface for the Telegram assistant. The bot is a mar
 The ingestor stores only items classified as likely to affect public stocks, equity sectors, rates, macro expectations, policy, regulation, earnings, filings, M&A, sanctions, tariffs, or market liquidity. Configure the deterministic gate with `MARKET_IMPACT_ALLOWED_CATEGORIES`, `MARKET_IMPACT_KEYWORDS`, `MARKET_IMPACT_REJECT_TERMS`, and `MARKET_IMPACT_MINIMUM_CONFIDENCE`. Optional LLM classification for uncertain items is disabled by default and controlled by `LLM_MARKET_IMPACT_CLASSIFICATION_ENABLED` and `LLM_MARKET_IMPACT_CLASSIFICATION_THRESHOLD`.
 
 Pulling is source-configurable. Use `fetch_interval_seconds`, `max_items`, and `max_item_age_hours` in source config to override `SOURCE_DEFAULT_FETCH_INTERVAL_SECONDS`, `SOURCE_MAX_ITEMS_PER_FETCH`, and `SOURCE_MAX_ITEM_AGE_HOURS`. The scheduler does not seed broad default feeds unless `DEFAULT_SOURCES_JSON` is set to a JSON array of source definitions.
+
+The curated RSS-only starter pack is checked in at [default-sources.json](default-sources.json). It prioritizes official macro, filings, policy, regulatory, energy, commodities, company-specific EDGAR, and market-news feeds. Use `/sourcepack [category]` to list feeds that can be checked or added. To enable it, set `DEFAULT_SOURCES_JSON` to the file contents in the deployment environment.
 
 Supported source providers:
 
