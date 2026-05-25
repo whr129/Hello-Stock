@@ -18,12 +18,12 @@ def test_extract_error_query_strips_generic_followup_words() -> None:
 
 
 def test_single_word_followup_is_treated_as_generic() -> None:
-    assert _is_generic_error_query("reuters") is True
+    assert _is_generic_error_query("source") is True
     assert _is_generic_error_query("") is True
 
 
 def test_specific_error_query_is_not_generic() -> None:
-    assert _is_generic_error_query("reuters forbidden") is False
+    assert _is_generic_error_query("feed forbidden") is False
 
 
 def test_extract_run_id_from_natural_trace_request() -> None:

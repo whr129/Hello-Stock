@@ -12,18 +12,21 @@ ROUTABLE_INTENTS: set[Intent] = {
     "research",
     "candidates",
     "signals",
+    "sourcepack",
+    "resources",
     "general_chat",
     "help",
 }
 ROUTER_SYSTEM_PROMPT = """
 You are the routing layer for a Telegram assistant with three product surfaces:
 1. Market-impact research
-2. Market quotes and technical analysis
+2. Resource inventory and assistant storage inspection
 3. Runtime debugging and execution-history lookup
 
 Return only valid JSON with this exact schema:
 {
-  "intent": "runtime" | "research" | "candidates" | "signals" | "general_chat" | "help",
+  "intent": "runtime" | "research" | "candidates" | "signals" |
+    "sourcepack" | "resources" | "general_chat" | "help",
   "args": ["STRING", "..."]
 }
 
@@ -38,6 +41,11 @@ Routing policy:
   attention, weak signals, emerging attention, or current rankings.
 - Use "signals" for requests asking why a specific ticker is ranked or showing
   up in market research signals.
+- Use "resources" when the user asks what resources, stored assets, data,
+  sources, memories, evidence, or records they currently have, or asks for
+  counts/details across available resource types.
+- Use "sourcepack" when the user asks to list available default feeds, source
+  pack entries, or sources they could inspect/check/add.
 - Use "research" for deep market research requests across themes, candidates,
   market-moving news, or attention/momentum signals.
 - Use "help" when the user is explicitly asking what the assistant can do or how to use it.
@@ -59,6 +67,8 @@ Examples:
 - "what happened in the last refresh?" -> {"intent":"runtime","args":[]}
 - "what names are starting to get attention?" -> {"intent":"candidates","args":[]}
 - "why is MU showing up in the candidates list?" -> {"intent":"signals","args":["MU"]}
+- "what resources do I have right now?" -> {"intent":"resources","args":[]}
+- "list sources I can check" -> {"intent":"sourcepack","args":[]}
 - "what can you do?" -> {"intent":"help","args":[]}
 - "who won the world series last year?" -> {"intent":"general_chat","args":[]}
 - "hello" -> {"intent":"general_chat","args":[]}
@@ -119,6 +129,33 @@ class IntentClassifier:
         lowered = text.lower()
         if any(term in lowered for term in ("help", "what can you do", "commands", "/help")):
             return "", [], "help"
+        if any(
+            term in lowered
+            for term in (
+                "source pack",
+                "sourcepack",
+                "sources i can check",
+                "sources to check",
+                "checkable sources",
+                "list sources",
+                "available feeds",
+                "default feeds",
+            )
+        ):
+            return "", [], "sourcepack"
+        if any(
+            term in lowered
+            for term in (
+                "what resources",
+                "which resources",
+                "resources do i have",
+                "resources i have",
+                "resource inventory",
+                "stored assets",
+                "data inventory",
+            )
+        ):
+            return "", [], "resources"
         if any(
             term in lowered
             for term in ("last refresh", "during refresh", "runtime", "trace", "alert", "debug")

@@ -1,0 +1,614 @@
+[
+  {
+    "name": "Federal Reserve - All Press Releases",
+    "provider": "rss",
+    "feed_url": "https://www.federalreserve.gov/feeds/press_all.xml",
+    "category": "macro",
+    "trust_score": 0.98,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "Federal Reserve - Monetary Policy",
+    "provider": "rss",
+    "feed_url": "https://www.federalreserve.gov/feeds/press_monetary.xml",
+    "category": "macro",
+    "trust_score": 0.98,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "Federal Reserve - Speeches",
+    "provider": "rss",
+    "feed_url": "https://www.federalreserve.gov/feeds/speeches.xml",
+    "category": "macro",
+    "trust_score": 0.96,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "Federal Reserve - H.15 Selected Interest Rates",
+    "provider": "rss",
+    "feed_url": "https://www.federalreserve.gov/feeds/h15.xml",
+    "category": "macro",
+    "trust_score": 0.98,
+    "config": {
+      "max_items": 20,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "BLS - Consumer Price Index",
+    "provider": "rss",
+    "feed_url": "https://www.bls.gov/feed/cpi.rss",
+    "category": "macro",
+    "trust_score": 0.98,
+    "config": {
+      "max_items": 20,
+      "max_item_age_hours": 720,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "BLS - Producer Price Index",
+    "provider": "rss",
+    "feed_url": "https://www.bls.gov/feed/ppi.rss",
+    "category": "macro",
+    "trust_score": 0.98,
+    "config": {
+      "max_items": 20,
+      "max_item_age_hours": 720,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "BLS - Employment Situation",
+    "provider": "rss",
+    "feed_url": "https://www.bls.gov/feed/empsit.rss",
+    "category": "macro",
+    "trust_score": 0.98,
+    "config": {
+      "max_items": 20,
+      "max_item_age_hours": 720,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "BLS - Job Openings and Labor Turnover",
+    "provider": "rss",
+    "feed_url": "https://www.bls.gov/feed/jolts.rss",
+    "category": "macro",
+    "trust_score": 0.98,
+    "config": {
+      "max_items": 20,
+      "max_item_age_hours": 720,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "BLS - Import and Export Prices",
+    "provider": "rss",
+    "feed_url": "https://www.bls.gov/feed/ximpim.rss",
+    "category": "macro",
+    "trust_score": 0.97,
+    "config": {
+      "max_items": 20,
+      "max_item_age_hours": 720,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "BLS - Productivity and Costs",
+    "provider": "rss",
+    "feed_url": "https://www.bls.gov/feed/prod2.rss",
+    "category": "macro",
+    "trust_score": 0.97,
+    "config": {
+      "max_items": 20,
+      "max_item_age_hours": 720,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "Census - Economic Indicators",
+    "provider": "rss",
+    "feed_url": "https://www.census.gov/economic-indicators/indicator.xml",
+    "category": "macro",
+    "trust_score": 0.97,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 720,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "SEC - Press Releases",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/news/pressreleases.rss",
+    "category": "regulatory",
+    "trust_score": 0.97,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "SEC - Speeches and Statements",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/news/speeches-statements.rss",
+    "category": "regulatory",
+    "trust_score": 0.95,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "SEC - Litigation Releases",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/enforcement-litigation/litigation-releases/rss",
+    "category": "regulatory",
+    "trust_score": 0.96,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "SEC - Trading Suspensions",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/enforcement-litigation/trading-suspensions/rss",
+    "category": "regulatory",
+    "trust_score": 0.96,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "SEC EDGAR - 8-K Current Reports",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&company=&type=8-K&dateb=&owner=include&start=0&count=40&output=atom",
+    "category": "filings",
+    "trust_score": 0.94,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 72,
+      "fetch_interval_seconds": 900
+    }
+  },
+  {
+    "name": "SEC EDGAR - 10-K Annual Reports",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&company=&type=10-K&dateb=&owner=include&start=0&count=40&output=atom",
+    "category": "filings",
+    "trust_score": 0.94,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "SEC EDGAR - 10-Q Quarterly Reports",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&company=&type=10-Q&dateb=&owner=include&start=0&count=40&output=atom",
+    "category": "filings",
+    "trust_score": 0.94,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "SEC EDGAR - S-1 Registration Statements",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&company=&type=S-1&dateb=&owner=include&start=0&count=40&output=atom",
+    "category": "filings",
+    "trust_score": 0.93,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "SEC EDGAR - Schedule 13D",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&company=&type=SC%2013D&dateb=&owner=include&start=0&count=40&output=atom",
+    "category": "filings",
+    "trust_score": 0.93,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "SEC EDGAR - Schedule 13G",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&company=&type=SC%2013G&dateb=&owner=include&start=0&count=40&output=atom",
+    "category": "filings",
+    "trust_score": 0.93,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "SEC EDGAR - Ownership Forms 3/4/5",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&company=&dateb=&owner=only&start=0&count=40&output=atom",
+    "category": "filings",
+    "trust_score": 0.92,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 72,
+      "fetch_interval_seconds": 900
+    }
+  },
+  {
+    "name": "USTR - Press Releases",
+    "provider": "rss",
+    "feed_url": "https://ustr.gov/archive/Meta_Content/RSS/ustr_press_releases_10475.xml",
+    "category": "policy",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 20,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "FTC - Press Releases",
+    "provider": "rss",
+    "feed_url": "https://www.ftc.gov/feeds/press-release.xml",
+    "category": "policy",
+    "trust_score": 0.95,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "FTC - Competition Press Releases",
+    "provider": "rss",
+    "feed_url": "https://www.ftc.gov/feeds/press-release-competition.xml",
+    "category": "policy",
+    "trust_score": 0.95,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "CFTC - General Press Releases",
+    "provider": "rss",
+    "feed_url": "https://www.cftc.gov/RSS/RSSGP/rssgp.xml",
+    "category": "regulatory",
+    "trust_score": 0.95,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "CFTC - Enforcement Press Releases",
+    "provider": "rss",
+    "feed_url": "https://www.cftc.gov/RSS/RSSENF/rssenf.xml",
+    "category": "regulatory",
+    "trust_score": 0.95,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "OCC - News Releases",
+    "provider": "rss",
+    "feed_url": "https://www.occ.gov/rss/occ_news.xml",
+    "category": "regulatory",
+    "trust_score": 0.94,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "FDA - Press Releases",
+    "provider": "rss",
+    "feed_url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml",
+    "category": "regulatory",
+    "trust_score": 0.95,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "FDA - Recalls, Market Withdrawals, and Safety Alerts",
+    "provider": "rss",
+    "feed_url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/recalls/rss.xml",
+    "category": "regulatory",
+    "trust_score": 0.95,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "FDA - MedWatch Safety Alerts",
+    "provider": "rss",
+    "feed_url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/medwatch/rss.xml",
+    "category": "regulatory",
+    "trust_score": 0.95,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "EIA - Today in Energy",
+    "provider": "rss",
+    "feed_url": "https://www.eia.gov/rss/todayinenergy.xml",
+    "category": "energy",
+    "trust_score": 0.96,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "EIA - Press Releases",
+    "provider": "rss",
+    "feed_url": "https://www.eia.gov/rss/press_rss.xml",
+    "category": "energy",
+    "trust_score": 0.96,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "EIA - Gasoline and Diesel Fuel Update",
+    "provider": "rss",
+    "feed_url": "https://www.eia.gov/petroleum/gasdiesel/includes/gas_diesel_rss.xml",
+    "category": "energy",
+    "trust_score": 0.96,
+    "config": {
+      "max_items": 20,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "EIA - What's New",
+    "provider": "rss",
+    "feed_url": "https://www.eia.gov/about/new/WNtest3.php",
+    "category": "energy",
+    "trust_score": 0.94,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "USDA - Latest News",
+    "provider": "rss",
+    "feed_url": "https://www.usda.gov/rss/latest-releases.xml",
+    "category": "commodities",
+    "trust_score": 0.94,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "BIS - Press Releases",
+    "provider": "rss",
+    "feed_url": "https://www.bis.org/doclist/all_pressrels.rss",
+    "category": "macro",
+    "trust_score": 0.95,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "BIS - Central Banker Speeches",
+    "provider": "rss",
+    "feed_url": "https://www.bis.org/doclist/cbspeeches.rss",
+    "category": "macro",
+    "trust_score": 0.95,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "BIS - Statistical Releases",
+    "provider": "rss",
+    "feed_url": "https://www.bis.org/doclist/all_statistics.rss",
+    "category": "macro",
+    "trust_score": 0.95,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 3600
+    }
+  },
+  {
+    "name": "Nasdaq - Markets",
+    "provider": "rss",
+    "feed_url": "https://www.nasdaq.com/feed/rssoutbound?category=Markets",
+    "category": "market_news",
+    "trust_score": 0.65,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 72,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "Nasdaq - Stocks",
+    "provider": "rss",
+    "feed_url": "https://www.nasdaq.com/feed/rssoutbound?category=Stocks",
+    "category": "market_news",
+    "trust_score": 0.65,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 72,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "Nasdaq - Earnings",
+    "provider": "rss",
+    "feed_url": "https://www.nasdaq.com/feed/rssoutbound?category=Earnings",
+    "category": "market_news",
+    "trust_score": 0.65,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 72,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "Nasdaq - IPOs",
+    "provider": "rss",
+    "feed_url": "https://www.nasdaq.com/feed/rssoutbound?category=IPO",
+    "category": "market_news",
+    "trust_score": 0.65,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 72,
+      "fetch_interval_seconds": 1800
+    }
+  },
+  {
+    "name": "Apple - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000320193&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 900
+    }
+  },
+  {
+    "name": "Microsoft - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000789019&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 900
+    }
+  },
+  {
+    "name": "NVIDIA - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001045810&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 900
+    }
+  },
+  {
+    "name": "Amazon - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001018724&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 900
+    }
+  },
+  {
+    "name": "Alphabet - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001652044&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 900
+    }
+  },
+  {
+    "name": "Meta Platforms - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001326801&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 900
+    }
+  },
+  {
+    "name": "Tesla - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001318605&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 900
+    }
+  },
+  {
+    "name": "Broadcom - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001730168&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 900
+    }
+  }
+]

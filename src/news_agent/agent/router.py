@@ -10,10 +10,12 @@ COMMAND_INTENTS: dict[str, Intent] = {
     "/sourceconfig": "sourceconfig",
     "/sourcefields": "sourcefields",
     "/sourcetest": "sourcetest",
+    "/sourcepack": "sourcepack",
     "/refresh": "refresh",
     "/memory": "memory",
     "/forget": "forget",
     "/resetmemory": "resetmemory",
+    "/resources": "resources",
     "/runtime": "runtime",
     "/job": "job",
     "/refreshreport": "refreshreport",
@@ -66,6 +68,7 @@ def skills_response() -> str:
         "- /sourceconfig <source-id> <key> <value>\n"
         "- /sourcefields <source-id> <field> <mapped-value>\n"
         "- /sourcetest <source-id>\n"
+        "- /sourcepack [category]\n"
         "- /removesource <source-id>\n"
         "\n"
         "Refresh\n"
@@ -82,6 +85,7 @@ def skills_response() -> str:
         "- /memory\n"
         "- /forget <memory-id>\n"
         "- /resetmemory\n"
+        "- /resources\n"
         "- /help\n"
         "- /skills\n"
         "\n"
@@ -113,12 +117,14 @@ def route_request(
     args = args or []
     if intent in {"sources", "addsource", "removesource"}:
         return RouteDecision(agents=("news",), capabilities=("source_admin",))
-    if intent in {"sourceconfig", "sourcefields", "sourcetest"}:
+    if intent in {"sourceconfig", "sourcefields", "sourcetest", "sourcepack"}:
         return RouteDecision(agents=("news",), capabilities=("source_admin",))
     if intent == "refresh":
         return RouteDecision(agents=("news",), capabilities=("scheduler_admin",))
     if intent in {"memory", "forget", "resetmemory"}:
         return RouteDecision(agents=("news",), capabilities=("memory_admin",))
+    if intent == "resources":
+        return RouteDecision(agents=("news",), capabilities=("resource_inventory",))
     if intent in {"runtime", "job", "refreshreport", "trace", "step"}:
         return RouteDecision(agents=("runtime",), capabilities=("runtime_inspection",))
     if intent == "alerts":

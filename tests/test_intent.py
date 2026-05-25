@@ -113,7 +113,49 @@ async def test_intent_classifier_uses_llm_router_for_runtime_request() -> None:
     assert intent == "runtime"
 
 
+@pytest.mark.asyncio
+async def test_intent_classifier_falls_back_to_resources_without_llm() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key=""))
+
+    _, args, intent = await classifier.classify("show me what resources I have now")
+
+    assert args == []
+    assert intent == "resources"
+
+
+@pytest.mark.asyncio
+async def test_intent_classifier_falls_back_to_sourcepack_without_llm() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key=""))
+
+    _, args, intent = await classifier.classify("list sources I can check")
+
+    assert args == []
+    assert intent == "sourcepack"
+
+
+@pytest.mark.asyncio
+async def test_intent_classifier_uses_llm_router_for_resources() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key="test"))
+    classifier.client = FakeClient('{"intent": "resources", "args": []}')
+
+    _, args, intent = await classifier.classify("how many stored resources do I have?")
+
+    assert args == []
+    assert intent == "resources"
+
+
+@pytest.mark.asyncio
+async def test_intent_classifier_uses_llm_router_for_sourcepack() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key="test"))
+    classifier.client = FakeClient('{"intent": "sourcepack", "args": []}')
+
+    _, args, intent = await classifier.classify("what default feeds are available?")
+
+    assert args == []
+    assert intent == "sourcepack"
+
+
 def test_router_prompt_mentions_supported_outputs() -> None:
     assert '"intent": "runtime" | "research"' in ROUTER_SYSTEM_PROMPT
-    assert '"signals" | "general_chat" | "help"' in ROUTER_SYSTEM_PROMPT
+    assert '"sourcepack" | "resources" | "general_chat" | "help"' in ROUTER_SYSTEM_PROMPT
     assert "Return only valid JSON" in ROUTER_SYSTEM_PROMPT

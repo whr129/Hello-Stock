@@ -30,7 +30,7 @@ def test_format_refresh_summary_includes_provider_counts() -> None:
         market_snapshot_count=3,
         error_count=1,
         provider_counts={"rss": 5, "twitter": 2},
-        errors=["Reuters Business: timeout"],
+        errors=["Business Feed: timeout"],
     )
 
     text = service.format_refresh_summary(summary)
@@ -39,7 +39,7 @@ def test_format_refresh_summary_includes_provider_counts() -> None:
     assert "rss: 5" in text
     assert "twitter: 2" in text
     assert "Error details:" in text
-    assert "Reuters Business: timeout" in text
+    assert "Business Feed: timeout" in text
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,9 @@
+import json
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from news_agent.agent.router import skills_response
@@ -11,10 +16,37 @@ from news_agent.scheduler.service import (
     parse_config_value,
 )
 from news_agent.settings import Settings
+from news_agent.storage.models import (
+    Article,
+    ArticleEmbedding,
+    ConversationEvent,
+    JobRun,
+    LongTermMemory,
+    MarketEntity,
+    MarketMention,
+    MarketSignalSnapshot,
+    MarketSnapshot,
+    MarketThemeMemory,
+    MemoryConsolidationJob,
+    RuntimeRun,
+    Source,
+    Summary,
+    SummaryEmbedding,
+)
 from news_agent.storage.repositories import (
     MemoryRepository,
     SourceRepository,
 )
+
+
+@dataclass(frozen=True)
+class ResourceSection:
+    name: str
+    count: int
+    details: tuple[str, ...] = ()
+
+
+SOURCE_PACK_PATH = Path(__file__).resolve().parents[4] / "docs/market-research/default-sources.json"
 
 
 class NewsSubagent:
@@ -41,6 +73,8 @@ class NewsSubagent:
                 "response": skills_response(),
                 "metadata": {"capability": "skills"},
             }
+        if "resource_inventory" in capabilities:
+            return await self._resource_inventory(state)
         if "scheduler_admin" in capabilities:
             return await self._scheduler_admin()
         if "source_admin" in capabilities:
@@ -222,6 +256,12 @@ class NewsSubagent:
                     "metadata": {"capability": "source_admin"},
                 }
 
+            if command == "/sourcepack":
+                return {
+                    "response": _format_source_pack(args),
+                    "metadata": {"capability": "source_admin"},
+                }
+
             if command == "/removesource":
                 if not args:
                     return {
@@ -303,6 +343,279 @@ class NewsSubagent:
             "metadata": {"capability": "memory_admin"},
         }
 
+    async def _resource_inventory(self, state: SupervisorState) -> AgentResult:
+        user_id = state["user_context"]["user_id"]
+        telegram_user_id = state.get("telegram_user_id")
+        chat_id = state.get("chat_id")
+
+        async with self.session_factory() as session:
+            sections = await _collect_resource_inventory(
+                session,
+                user_id=user_id,
+                telegram_user_id=telegram_user_id,
+                chat_id=chat_id,
+            )
+
+        return {
+            "response": _format_resource_inventory(sections),
+            "metadata": {
+                "capability": "resource_inventory",
+                "resource_counts": {section.name: section.count for section in sections},
+            },
+        }
+
+
+async def _collect_resource_inventory(
+    session,
+    *,
+    user_id: int,
+    telegram_user_id: int | None,
+    chat_id: int | None,
+) -> list[ResourceSection]:
+    source_repository = SourceRepository(session)
+    sources = await source_repository.list_enabled(user_id)
+    source_details = _source_details(sources)
+
+    memories = await _scalars(
+        session,
+        select(LongTermMemory)
+        .where(LongTermMemory.user_id == user_id)
+        .where(LongTermMemory.status == "active")
+        .order_by(LongTermMemory.updated_at.desc())
+        .limit(5),
+    )
+    memory_details = _join_details(
+        _format_count_pairs(
+            await _count_by(
+                session,
+                LongTermMemory,
+                LongTermMemory.category,
+                LongTermMemory.user_id == user_id,
+                LongTermMemory.status == "active",
+            ),
+            "categories",
+        ),
+        _format_recent_memories(memories),
+    )
+
+    runtime_filters = []
+    if telegram_user_id is not None:
+        runtime_filters.append(RuntimeRun.telegram_user_id == telegram_user_id)
+    elif chat_id is not None:
+        runtime_filters.append(RuntimeRun.chat_id == chat_id)
+    runtime_count = await _count(session, RuntimeRun, *runtime_filters)
+    runtime_details = _join_details(
+        _format_count_pairs(
+            await _count_by(session, RuntimeRun, RuntimeRun.status, *runtime_filters),
+            "statuses",
+        ),
+        _format_recent_runs(
+            await _scalars(
+                session,
+                select(RuntimeRun).where(*runtime_filters).order_by(RuntimeRun.started_at.desc()).limit(5),
+            )
+        ),
+    )
+
+    return [
+        ResourceSection("sources", len(sources), source_details),
+        ResourceSection(
+            "long_term_memories",
+            await _count(
+                session,
+                LongTermMemory,
+                LongTermMemory.user_id == user_id,
+                LongTermMemory.status == "active",
+            ),
+            memory_details,
+        ),
+        ResourceSection(
+            "conversation_events",
+            await _count(session, ConversationEvent, ConversationEvent.user_id == user_id),
+            _format_count_pairs(
+                await _count_by(
+                    session,
+                    ConversationEvent,
+                    ConversationEvent.role,
+                    ConversationEvent.user_id == user_id,
+                ),
+                "roles",
+            ),
+        ),
+        ResourceSection(
+            "memory_jobs",
+            await _count(
+                session,
+                MemoryConsolidationJob,
+                MemoryConsolidationJob.user_id == user_id,
+            ),
+            _format_count_pairs(
+                await _count_by(
+                    session,
+                    MemoryConsolidationJob,
+                    MemoryConsolidationJob.status,
+                    MemoryConsolidationJob.user_id == user_id,
+                ),
+                "statuses",
+            ),
+        ),
+        ResourceSection(
+            "articles",
+            await _count(session, Article),
+            _join_details(
+                _format_count_pairs(
+                    await _count_by(session, Article, Article.category),
+                    "categories",
+                ),
+                _format_recent_articles(
+                    await _scalars(
+                        session,
+                        select(Article).order_by(Article.created_at.desc()).limit(5),
+                    )
+                ),
+            ),
+        ),
+        ResourceSection("article_embeddings", await _count(session, ArticleEmbedding)),
+        ResourceSection(
+            "summaries",
+            await _count(session, Summary),
+            _format_count_pairs(
+                await _count_by(session, Summary, Summary.summary_type),
+                "types",
+            ),
+        ),
+        ResourceSection("summary_embeddings", await _count(session, SummaryEmbedding)),
+        ResourceSection(
+            "market_entities",
+            await _count(session, MarketEntity),
+            _format_count_pairs(
+                await _count_by(session, MarketEntity, MarketEntity.active),
+                "active",
+            ),
+        ),
+        ResourceSection(
+            "market_mentions",
+            await _count(session, MarketMention),
+            _format_count_pairs(
+                await _count_by(session, MarketMention, MarketMention.source_family),
+                "source families",
+            ),
+        ),
+        ResourceSection(
+            "signal_snapshots",
+            await _count(session, MarketSignalSnapshot),
+            _format_count_pairs(
+                await _count_by(session, MarketSignalSnapshot, MarketSignalSnapshot.window),
+                "windows",
+            ),
+        ),
+        ResourceSection("theme_memories", await _count(session, MarketThemeMemory)),
+        ResourceSection("market_snapshots", await _count(session, MarketSnapshot)),
+        ResourceSection("runtime_runs", runtime_count, runtime_details),
+        ResourceSection(
+            "job_runs",
+            await _count(session, JobRun),
+            _format_count_pairs(await _count_by(session, JobRun, JobRun.status), "statuses"),
+        ),
+    ]
+
+
+async def _count(session, model, *criteria) -> int:
+    statement = select(func.count()).select_from(model)
+    if criteria:
+        statement = statement.where(*criteria)
+    result = await session.execute(statement)
+    return int(result.scalar_one() or 0)
+
+
+async def _count_by(session, model, column, *criteria) -> list[tuple[object, int]]:
+    statement = select(column, func.count()).select_from(model)
+    if criteria:
+        statement = statement.where(*criteria)
+    result = await session.execute(statement.group_by(column).order_by(func.count().desc()))
+    return [(key, int(count)) for key, count in result.all()]
+
+
+async def _scalars(session, statement) -> list:
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+def _format_resource_inventory(sections: list[ResourceSection]) -> str:
+    lines = ["Resource inventory:"]
+    for section in sections:
+        lines.append(f"- {section.name}: {section.count}")
+        for detail in section.details:
+            lines.append(f"  {detail}")
+    return "\n".join(lines)
+
+
+def _source_details(sources: list[Source]) -> tuple[str, ...]:
+    if not sources:
+        return ()
+    provider_counts = Counter(source.provider for source in sources)
+    category_counts = Counter(source.category for source in sources)
+    unhealthy_count = sum(1 for source in sources if source.last_error)
+    details = [
+        _format_counter(provider_counts, "providers"),
+        _format_counter(category_counts, "categories"),
+    ]
+    if unhealthy_count:
+        details.append(f"last_error: {unhealthy_count}")
+    recent = ", ".join(
+        f"#{source.id} {source.name} [{source.provider}/{source.category}]"
+        for source in sources[:5]
+    )
+    if recent:
+        details.append(f"examples: {recent}")
+    return tuple(details)
+
+
+def _format_count_pairs(pairs: list[tuple[object, int]], label: str) -> tuple[str, ...]:
+    if not pairs:
+        return ()
+    return (_format_counter(Counter({str(key): count for key, count in pairs}), label),)
+
+
+def _format_counter(counter: Counter, label: str) -> str:
+    values = ", ".join(f"{key}: {count}" for key, count in counter.most_common(6))
+    return f"{label}: {values}"
+
+
+def _join_details(*groups: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(detail for group in groups for detail in group)
+
+
+def _format_recent_memories(memories: list[LongTermMemory]) -> tuple[str, ...]:
+    if not memories:
+        return ()
+    values = ", ".join(
+        f"{str(memory.public_id)[:8]} [{memory.category}] {_truncate(memory.memory_text, 48)}"
+        for memory in memories
+    )
+    return (f"recent: {values}",)
+
+
+def _format_recent_articles(articles: list[Article]) -> tuple[str, ...]:
+    if not articles:
+        return ()
+    values = ", ".join(f"#{article.id} {_truncate(article.title, 56)}" for article in articles)
+    return (f"recent: {values}",)
+
+
+def _format_recent_runs(runs: list[RuntimeRun]) -> tuple[str, ...]:
+    if not runs:
+        return ()
+    values = ", ".join(f"#{run.id} {run.workflow}/{run.status}" for run in runs)
+    return (f"recent: {values}",)
+
+
+def _truncate(value: str, limit: int) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
+
 
 def _source_config_warning(provider: str, config: dict | None) -> str:
     normalized = provider.strip().lower()
@@ -318,6 +631,54 @@ def _source_config_warning(provider: str, config: dict | None) -> str:
     if normalized == "newsletter":
         return "This newsletter source is feed-backed."
     return ""
+
+
+def _format_source_pack(args: list[str] | None = None) -> str:
+    category_filter = args[0].strip().lower() if args else ""
+    sources = _load_source_pack()
+    if category_filter:
+        sources = [
+            source
+            for source in sources
+            if str(source.get("category", "")).strip().lower() == category_filter
+        ]
+
+    if not sources:
+        if category_filter:
+            return f"No source-pack feeds found for category '{category_filter}'."
+        return "No source-pack feeds are available."
+
+    categories = Counter(str(source.get("category", "unknown")) for source in sources)
+    lines = [
+        f"Checkable source pack feeds: {len(sources)}",
+        _format_counter(categories, "categories"),
+    ]
+    for index, source in enumerate(sources, start=1):
+        lines.append(
+            f"- {index}. {source['name']} [{source['category']}] "
+            f"trust={source.get('trust_score', 0)}"
+        )
+        lines.append(f"  {source['feed_url']}")
+    lines.append("Use /sourcepack <category> to filter.")
+    lines.append("Use /addsource rss <feed-url>, then /sourcetest <source-id> to check one.")
+    return "\n".join(lines)
+
+
+def _load_source_pack() -> list[dict[str, object]]:
+    try:
+        payload = json.loads(SOURCE_PACK_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [
+        source
+        for source in payload
+        if isinstance(source, dict)
+        and isinstance(source.get("name"), str)
+        and isinstance(source.get("feed_url"), str)
+        and isinstance(source.get("category"), str)
+    ]
 
 
 def _parse_source_id(value: str) -> int | None:

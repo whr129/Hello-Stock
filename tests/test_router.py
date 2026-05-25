@@ -60,6 +60,22 @@ def test_parse_skills_command() -> None:
     assert intent == "skills"
 
 
+def test_parse_resources_command() -> None:
+    command, args, intent = parse_message("/resources")
+
+    assert command == "/resources"
+    assert args == []
+    assert intent == "resources"
+
+
+def test_parse_sourcepack_command() -> None:
+    command, args, intent = parse_message("/sourcepack macro")
+
+    assert command == "/sourcepack"
+    assert args == ["macro"]
+    assert intent == "sourcepack"
+
+
 def test_parse_runtime_command() -> None:
     command, args, intent = parse_message("/runtime")
 
@@ -103,6 +119,20 @@ def test_route_skills_to_news_skills_capability() -> None:
 
     assert route.agents == ("news",)
     assert route.capabilities == ("skills",)
+
+
+def test_route_resources_to_news_inventory_capability() -> None:
+    route = route_request("resources")
+
+    assert route.agents == ("news",)
+    assert route.capabilities == ("resource_inventory",)
+
+
+def test_route_sourcepack_to_news_source_admin_capability() -> None:
+    route = route_request("sourcepack")
+
+    assert route.agents == ("news",)
+    assert route.capabilities == ("source_admin",)
 
 
 def test_route_runtime_to_runtime_agent() -> None:
