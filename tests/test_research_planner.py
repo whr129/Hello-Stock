@@ -11,6 +11,8 @@ def test_research_command_produces_deep_research_plan() -> None:
     assert plan.task_type == "deep_research"
     assert plan.research_horizon == "30d"
     assert "analysis" in plan.agents_to_run
+    assert "macro" in plan.agents_to_run
+    assert "filings" in plan.agents_to_run
 
 
 def test_candidates_command_produces_candidate_ranking_plan() -> None:
@@ -33,3 +35,15 @@ def test_signals_command_extracts_ticker() -> None:
 
     assert plan.task_type == "stock_lookup"
     assert plan.entities.tickers == ["MU"]
+
+
+def test_research_command_extracts_sector_terms_without_ai_as_ticker() -> None:
+    plan = PlannerAgent().plan(
+        command="/research",
+        args=["semiconductor", "AI", "infrastructure"],
+        message_text="/research semiconductor AI infrastructure",
+    )
+
+    assert plan.entities.tickers == []
+    assert {"AI", "AI infrastructure", "semiconductors"} <= set(plan.entities.sectors)
+    assert plan.entities.themes == plan.entities.sectors

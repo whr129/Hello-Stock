@@ -3,6 +3,22 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG: str = (
+    '{"AI":["ai","artificial intelligence","generative ai","foundation model",'
+    '"large language model","llm"],'
+    '"AI infrastructure":["ai infrastructure","gpu","accelerator","data center",'
+    '"datacenter","ai server","inference","training cluster"],'
+    '"semiconductors":["semiconductor","semiconductors","chip","chips","foundry",'
+    '"wafer","fab","advanced packaging"],'
+    '"memory chips":["hbm","dram","nand","memory chip","memory demand"],'
+    '"cloud capex":["cloud capex","capital expenditure","hyperscaler","cloud spending"],'
+    '"rates":["fed","treasury yield","rate cut","rate hike","inflation","cpi"],'
+    '"regional banks":["regional bank","deposit","commercial real estate"],'
+    '"energy supply":["oil","natural gas","opec","lng","energy supply"],'
+    '"obesity drugs":["glp-1","obesity","weight loss drug"],'
+    '"defense spending":["defense","missile","military contract","geopolitical"]}'
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -21,9 +37,7 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
     general_search_model: str = Field(default="", alias="GENERAL_SEARCH_MODEL")
     general_search_max_sources: int = Field(default=5, alias="GENERAL_SEARCH_MAX_SOURCES")
-    general_search_timeout_seconds: int = Field(
-        default=30, alias="GENERAL_SEARCH_TIMEOUT_SECONDS"
-    )
+    general_search_timeout_seconds: int = Field(default=30, alias="GENERAL_SEARCH_TIMEOUT_SECONDS")
     answer_reflection_enabled: bool = Field(default=True, alias="ANSWER_REFLECTION_ENABLED")
     answer_reflection_max_retries: int = Field(default=1, alias="ANSWER_REFLECTION_MAX_RETRIES")
     runtime_alert_telegram_chat_id: int = Field(default=0, alias="RUNTIME_ALERT_TELEGRAM_CHAT_ID")
@@ -79,29 +93,52 @@ class Settings(BaseSettings):
         alias="LLM_MARKET_IMPACT_CLASSIFICATION_THRESHOLD",
     )
     scheduler_tick_seconds: int = Field(default=60, alias="SCHEDULER_TICK_SECONDS")
+    market_price_pipeline_interval_seconds: int = Field(
+        default=600,
+        alias="MARKET_PRICE_PIPELINE_INTERVAL_SECONDS",
+    )
+    breaking_resources_pipeline_interval_seconds: int = Field(
+        default=1800,
+        alias="BREAKING_RESOURCES_PIPELINE_INTERVAL_SECONDS",
+    )
+    daily_resources_pipeline_interval_seconds: int = Field(
+        default=86400,
+        alias="DAILY_RESOURCES_PIPELINE_INTERVAL_SECONDS",
+    )
     news_freshness_hours: int = Field(default=24, alias="NEWS_FRESHNESS_HOURS")
     summary_freshness_hours: int = Field(default=24, alias="SUMMARY_FRESHNESS_HOURS")
     snapshot_freshness_minutes: int = Field(default=15, alias="SNAPSHOT_FRESHNESS_MINUTES")
     article_retention_days: int = Field(default=30, alias="ARTICLE_RETENTION_DAYS")
     snapshot_retention_days: int = Field(default=30, alias="SNAPSHOT_RETENTION_DAYS")
     market_universe_symbols: str = Field(
-        default="SPY,QQQ,DIA,IWM,AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AVGO,JPM,V,LLY,UNH,XOM",
+        default=(
+            "NVDA,MSFT,AAPL,GOOGL,AMZN,META,AVGO,AMD,MU,TSM,LRCX,KLAC,ORCL,PLTR,"
+            "JPM,BAC,GS,MS,V,MA,BRK-B,"
+            "LLY,UNH,JNJ,MRK,ABBV,ISRG,TMO,"
+            "TSLA,HD,WMT,COST,MCD,NKE,DIS,NFLX,"
+            "XOM,CVX,SLB,GE,CAT,DE,RTX,LMT,NEM,LIN,"
+            "NEE,SO,TMUS,AMT"
+        ),
         alias="MARKET_UNIVERSE_SYMBOLS",
     )
-    market_research_theme_config: str = Field(
+    market_universe_areas_json: str = Field(
         default=(
-            '{"AI infrastructure":["ai","artificial intelligence","gpu","data center",'
-            '"datacenter"],'
-            '"memory chips":["hbm","dram","nand","memory chip","memory demand"],'
-            '"cloud capex":["cloud capex","capital expenditure","hyperscaler","cloud spending"],'
-            '"rates":["fed","treasury yield","rate cut","rate hike","inflation","cpi"],'
-            '"regional banks":["regional bank","deposit","commercial real estate"],'
-            '"energy supply":["oil","natural gas","opec","lng","energy supply"],'
-            '"obesity drugs":["glp-1","obesity","weight loss drug"],'
-            '"defense spending":["defense","missile","military contract","geopolitical"]}'
+            '{"AI, Cloud, Semis, Software":["NVDA","MSFT","AAPL","GOOGL","AMZN","META",'
+            '"AVGO","AMD","MU","TSM","LRCX","KLAC","ORCL","PLTR"],'
+            '"Financials and Payments":["JPM","BAC","GS","MS","V","MA","BRK-B"],'
+            '"Healthcare and Life Sciences":["LLY","UNH","JNJ","MRK","ABBV","ISRG","TMO"],'
+            '"Consumer and Media":["TSLA","HD","WMT","COST","MCD","NKE","DIS","NFLX"],'
+            '"Energy, Industrials, Materials, Defense":["XOM","CVX","SLB","GE","CAT","DE",'
+            '"RTX","LMT","NEM","LIN"],'
+            '"Utilities, Telecom, Real Estate Infrastructure":["NEE","SO","TMUS","AMT"]}'
         ),
-        alias="MARKET_RESEARCH_THEME_CONFIG",
+        alias="MARKET_UNIVERSE_AREAS_JSON",
     )
+    market_research_sector_config: str = Field(
+        default=DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG,
+        alias="MARKET_RESEARCH_SECTOR_CONFIG",
+    )
+    market_research_theme_config: str = Field(default="", alias="MARKET_RESEARCH_THEME_CONFIG")
     market_research_blocked_tickers: str = Field(
         default="AI,CEO,CFO,CPA,ETF,GDP,HBM,IPO,LLC,SEC,THIS,USA",
         alias="MARKET_RESEARCH_BLOCKED_TICKERS",
@@ -118,14 +155,19 @@ class Settings(BaseSettings):
         default=900,
         alias="SOURCE_DEFAULT_FETCH_INTERVAL_SECONDS",
     )
-    default_sources_json: str = Field(default="[]", alias="DEFAULT_SOURCES_JSON")
+    default_sources_json: str = Field(default="", alias="DEFAULT_SOURCES_JSON")
+    default_source_pack_enabled: bool = Field(default=True, alias="DEFAULT_SOURCE_PACK_ENABLED")
     source_max_items_per_fetch: int = Field(default=50, alias="SOURCE_MAX_ITEMS_PER_FETCH")
     source_max_item_age_hours: int = Field(default=72, alias="SOURCE_MAX_ITEM_AGE_HOURS")
+    source_excluded_names: str = Field(default="Reuters", alias="SOURCE_EXCLUDED_NAMES")
     source_fetch_max_attempts: int = Field(default=3, alias="SOURCE_FETCH_MAX_ATTEMPTS")
     source_fetch_retry_backoff_seconds: int = Field(
         default=2,
         alias="SOURCE_FETCH_RETRY_BACKOFF_SECONDS",
     )
+    alpha_vantage_api_key: str = Field(default="", alias="ALPHA_VANTAGE_API_KEY")
+    finnhub_api_key: str = Field(default="", alias="FINNHUB_API_KEY")
+    polygon_api_key: str = Field(default="", alias="POLYGON_API_KEY")
     market_fetch_max_attempts: int = Field(default=2, alias="MARKET_FETCH_MAX_ATTEMPTS")
     market_fetch_retry_backoff_seconds: int = Field(
         default=2,
@@ -134,9 +176,7 @@ class Settings(BaseSettings):
     refresh_report_enabled: bool = Field(default=True, alias="REFRESH_REPORT_ENABLED")
     signal_retention_days: int = Field(default=30, alias="SIGNAL_RETENTION_DAYS")
     signal_alert_threshold: float = Field(default=75.0, alias="SIGNAL_ALERT_THRESHOLD")
-    signal_alert_cooldown_minutes: int = Field(
-        default=360, alias="SIGNAL_ALERT_COOLDOWN_MINUTES"
-    )
+    signal_alert_cooldown_minutes: int = Field(default=360, alias="SIGNAL_ALERT_COOLDOWN_MINUTES")
     signal_weight_mention_velocity: float = Field(
         default=1.0, alias="SIGNAL_WEIGHT_MENTION_VELOCITY"
     )
@@ -147,9 +187,7 @@ class Settings(BaseSettings):
     signal_weight_semantic_similarity: float = Field(
         default=1.0, alias="SIGNAL_WEIGHT_SEMANTIC_SIMILARITY"
     )
-    signal_weight_price_momentum: float = Field(
-        default=1.0, alias="SIGNAL_WEIGHT_PRICE_MOMENTUM"
-    )
+    signal_weight_price_momentum: float = Field(default=1.0, alias="SIGNAL_WEIGHT_PRICE_MOMENTUM")
     signal_weight_volume: float = Field(default=1.0, alias="SIGNAL_WEIGHT_VOLUME")
     signal_weight_theme_persistence: float = Field(
         default=1.0, alias="SIGNAL_WEIGHT_THEME_PERSISTENCE"

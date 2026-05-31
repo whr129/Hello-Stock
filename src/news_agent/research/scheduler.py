@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from news_agent.research.extraction import MentionExtractor
+from news_agent.research.extraction import MentionExtractor, sector_keywords_from_settings
 from news_agent.research.scoring import SignalScorer
 from news_agent.settings import Settings
 from news_agent.storage.models import MarketMention
@@ -105,6 +105,27 @@ async def score_market_signals(session: AsyncSession, settings: Settings) -> int
             )
             saved += 1
     return saved
+
+
+async def enrich_market_sectors(session: AsyncSession, settings: Settings) -> int:
+    configured_sectors = set(sector_keywords_from_settings(settings))
+    if not configured_sectors:
+        return 0
+    aggregates = await MarketMentionRepository(session).aggregate(
+        since=datetime.now(UTC) - timedelta(days=30)
+    )
+    return sum(1 for aggregate in aggregates if aggregate.theme in configured_sectors)
+
+
+async def count_confident_signal_context(session: AsyncSession, settings: Settings) -> int:
+    snapshots = await MarketSignalRepository(session).fetch_top_candidates(
+        window="24h",
+        limit=50,
+        since=datetime.now(UTC) - timedelta(days=30),
+    )
+    return sum(
+        1 for snapshot in snapshots if snapshot.total_score >= settings.signal_alert_threshold
+    )
 
 
 async def prune_market_research_data(session: AsyncSession, settings: Settings) -> int:

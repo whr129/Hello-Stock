@@ -8,6 +8,9 @@ from news_agent.research.analysis import explain_candidates
 from news_agent.research.planner import PlannerAgent
 from news_agent.research.reporting import format_candidates, format_research_status, format_signal
 from news_agent.research.scheduler import (
+    backfill_signal_evidence_links,
+    count_confident_signal_context,
+    enrich_market_sectors,
     extract_market_mentions,
     prune_market_research_data,
     score_market_signals,
@@ -20,7 +23,7 @@ class ResearchSubagent:
     def __init__(self, session_factory: async_sessionmaker, settings: Settings) -> None:
         self.session_factory = session_factory
         self.settings = settings
-        self.planner = PlannerAgent()
+        self.planner = PlannerAgent(settings)
         self.trace_service = RuntimeTraceService(session_factory, settings)
 
     async def run(self, state: SupervisorState) -> AgentResult:
@@ -41,6 +44,7 @@ class ResearchSubagent:
                     metadata={
                         "task_type": plan.task_type,
                         "tickers": plan.entities.tickers,
+                        "sectors": plan.entities.sectors,
                         "agents": plan.agents_to_run,
                     },
                 )
@@ -55,6 +59,16 @@ class ResearchSubagent:
             return {
                 "response": format_research_status(runs),
                 "metadata": {"capability": "market_research", "plan": plan.task_type},
+            }
+
+        if plan.command == "/signals" and not plan.entities.tickers:
+            return {
+                "response": "Usage: /signals <ticker>",
+                "metadata": {
+                    "capability": "market_research",
+                    "plan": plan.task_type,
+                    "status": "missing_ticker",
+                },
             }
 
         async with self.session_factory() as session:
@@ -73,6 +87,26 @@ class ResearchSubagent:
                     extraction_step_id,
                     {"mention_count": mention_count},
                 )
+                sector_step_id = await self._start_iteration_step(
+                    state,
+                    "research:sector_enrichment",
+                    {"sectors": plan.entities.sectors},
+                )
+                sector_context_count = await enrich_market_sectors(session, self.settings)
+                await self._finish_iteration_step(
+                    sector_step_id,
+                    {"sector_context_count": sector_context_count},
+                )
+                backfill_step_id = await self._start_iteration_step(
+                    state,
+                    "research:evidence_backfill",
+                    {"limit": 500},
+                )
+                backfilled_count = await backfill_signal_evidence_links(session)
+                await self._finish_iteration_step(
+                    backfill_step_id,
+                    {"signal_evidence_backfill_count": backfilled_count},
+                )
                 scoring_step_id = await self._start_iteration_step(
                     state,
                     "research:score_signals",
@@ -80,13 +114,29 @@ class ResearchSubagent:
                 )
                 signal_count = await score_market_signals(session, self.settings)
                 await self._finish_iteration_step(scoring_step_id, {"signal_count": signal_count})
+                confidence_step_id = await self._start_iteration_step(
+                    state,
+                    "research:confidence_filter",
+                    {"window": "24h", "threshold": self.settings.signal_alert_threshold},
+                )
+                confident_signal_count = await count_confident_signal_context(
+                    session,
+                    self.settings,
+                )
+                await self._finish_iteration_step(
+                    confidence_step_id,
+                    {"confident_signal_count": confident_signal_count},
+                )
                 cleanup_step_id = await self._start_iteration_step(state, "research:cleanup", {})
                 pruned_count = await prune_market_research_data(session, self.settings)
                 await self._finish_iteration_step(cleanup_step_id, {"pruned_count": pruned_count})
                 await session.commit()
             else:
                 mention_count = 0
+                sector_context_count = 0
+                backfilled_count = 0
                 signal_count = 0
+                confident_signal_count = 0
                 pruned_count = 0
 
             repository = MarketSignalRepository(session)
@@ -117,8 +167,12 @@ class ResearchSubagent:
             "metadata": {
                 "capability": "market_research",
                 "plan": plan.task_type,
+                "sectors": plan.entities.sectors,
                 "mention_count": mention_count,
+                "sector_context_count": sector_context_count,
+                "signal_evidence_backfill_count": backfilled_count,
                 "signal_count": signal_count,
+                "confident_signal_count": confident_signal_count,
                 "pruned_count": pruned_count,
             },
         }

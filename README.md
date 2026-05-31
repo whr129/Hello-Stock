@@ -49,8 +49,13 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    tick[Scheduler tick loop] --> refresh{refresh due?}
-    refresh -->|yes| fetch[fetch sources + market snapshots]
+    tick[Scheduler tick loop] --> due{pipeline due?}
+    due --> prices[market_prices: 10 min during US market hours]
+    due --> breaking[breaking_resources: 30 min]
+    due --> daily[daily_resources: daily]
+    prices --> fetch[fetch market snapshots]
+    breaking --> fetch[fetch tiered sources]
+    daily --> fetch
     fetch --> store[dedupe and persist]
     store --> summarize[precompute summaries + embeddings]
     summarize --> mentions[extract market mentions]
@@ -129,7 +134,7 @@ PYTHONPATH=src .venv/bin/ruff check .
 
 - `/research`, `/candidates`, `/signals <ticker>`, `/researchstatus`
 - `/sources`, `/addsource <provider> <target>`, `/sourceconfig <id> <key> <value>`, `/sourcefields <id> <field> <value>`, `/sourcetest <id>`, `/removesource <id>`
-- `/refresh`
+- `/refresh [pipeline]`
 - `/runtime`, `/job <run-id>`, `/trace <run-id>`, `/step <run-id> <step-name>`, `/alerts`
 - `/memory`, `/forget <memory-id>`, `/resetmemory`
 - `/skills`, `/help`
@@ -142,12 +147,13 @@ You can also ask natural-language questions directly, for example:
 
 ## Source Providers
 
-Supported source types are `rss`, `twitter`, and `newsletter`.
+Supported source types are `rss`, `twitter`, `newsletter`, `alpha_vantage`, `finnhub`, and `polygon`.
 
 - `rss` works directly with a feed URL.
 - `twitter` and `newsletter` are currently feed-backed account sources, not native API integrations.
 - For `twitter` or `newsletter`, you usually need `config.feed_url` after `/addsource`.
-- No broad default feeds are created unless `DEFAULT_SOURCES_JSON` is configured.
+- `alpha_vantage`, `finnhub`, and `polygon` are optional API-backed providers enabled only when their API keys are configured.
+- The checked-in default source pack is enabled by default with tier metadata for `breaking_resources` and `daily_resources`; set `DEFAULT_SOURCE_PACK_ENABLED=false` to disable it.
 
 Example:
 

@@ -8,7 +8,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -20,7 +21,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -32,7 +34,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -44,7 +47,8 @@
     "config": {
       "max_items": 20,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -56,7 +60,8 @@
     "config": {
       "max_items": 20,
       "max_item_age_hours": 720,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -68,7 +73,8 @@
     "config": {
       "max_items": 20,
       "max_item_age_hours": 720,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -80,7 +86,8 @@
     "config": {
       "max_items": 20,
       "max_item_age_hours": 720,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -92,7 +99,8 @@
     "config": {
       "max_items": 20,
       "max_item_age_hours": 720,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -104,7 +112,8 @@
     "config": {
       "max_items": 20,
       "max_item_age_hours": 720,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -116,7 +125,8 @@
     "config": {
       "max_items": 20,
       "max_item_age_hours": 720,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -128,7 +138,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 720,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -140,7 +151,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -152,7 +164,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -164,7 +177,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -176,7 +190,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -188,7 +203,8 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 72,
-      "fetch_interval_seconds": 900
+      "fetch_interval_seconds": 900,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -200,7 +216,8 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -212,7 +229,8 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -224,7 +242,8 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -236,7 +255,8 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -248,7 +268,8 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -260,7 +281,8 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 72,
-      "fetch_interval_seconds": 900
+      "fetch_interval_seconds": 900,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -272,7 +294,8 @@
     "config": {
       "max_items": 20,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -284,7 +307,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -296,7 +320,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -308,7 +333,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -320,7 +346,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -332,7 +359,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -344,7 +372,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -356,7 +385,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -368,7 +398,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -380,7 +411,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -392,7 +424,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -404,7 +437,8 @@
     "config": {
       "max_items": 20,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -416,7 +450,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -428,7 +463,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -440,7 +476,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -452,7 +489,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -464,7 +502,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 3600
+      "fetch_interval_seconds": 3600,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -476,7 +515,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 72,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -488,7 +528,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 72,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -500,7 +541,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 72,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -512,7 +554,8 @@
     "config": {
       "max_items": 25,
       "max_item_age_hours": 72,
-      "fetch_interval_seconds": 1800
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources"
     }
   },
   {
@@ -524,7 +567,12 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 900
+      "fetch_interval_seconds": 900,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "AAPL"
+      ],
+      "area": "AI, Cloud, Semis, Software"
     }
   },
   {
@@ -536,7 +584,12 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 900
+      "fetch_interval_seconds": 900,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "MSFT"
+      ],
+      "area": "AI, Cloud, Semis, Software"
     }
   },
   {
@@ -548,7 +601,12 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 900
+      "fetch_interval_seconds": 900,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "NVDA"
+      ],
+      "area": "AI, Cloud, Semis, Software"
     }
   },
   {
@@ -560,7 +618,12 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 900
+      "fetch_interval_seconds": 900,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "AMZN"
+      ],
+      "area": "AI, Cloud, Semis, Software"
     }
   },
   {
@@ -572,7 +635,12 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 900
+      "fetch_interval_seconds": 900,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "GOOGL"
+      ],
+      "area": "AI, Cloud, Semis, Software"
     }
   },
   {
@@ -584,7 +652,12 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 900
+      "fetch_interval_seconds": 900,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "META"
+      ],
+      "area": "AI, Cloud, Semis, Software"
     }
   },
   {
@@ -596,7 +669,12 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 900
+      "fetch_interval_seconds": 900,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "TSLA"
+      ],
+      "area": "Consumer and Media"
     }
   },
   {
@@ -608,7 +686,840 @@
     "config": {
       "max_items": 40,
       "max_item_age_hours": 168,
-      "fetch_interval_seconds": 900
+      "fetch_interval_seconds": 900,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "AVGO"
+      ],
+      "area": "AI, Cloud, Semis, Software"
+    }
+  },
+  {
+    "name": "Advanced Micro Devices - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000002488&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "AMD"
+      ],
+      "area": "AI, Cloud, Semis, Software"
+    }
+  },
+  {
+    "name": "Micron Technology - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000723125&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "MU"
+      ],
+      "area": "AI, Cloud, Semis, Software"
+    }
+  },
+  {
+    "name": "Taiwan Semiconductor Manufacturing - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001046179&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "TSM"
+      ],
+      "area": "AI, Cloud, Semis, Software"
+    }
+  },
+  {
+    "name": "Lam Research - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000707549&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "LRCX"
+      ],
+      "area": "AI, Cloud, Semis, Software"
+    }
+  },
+  {
+    "name": "KLA - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000319201&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "KLAC"
+      ],
+      "area": "AI, Cloud, Semis, Software"
+    }
+  },
+  {
+    "name": "Oracle - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001341439&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "ORCL"
+      ],
+      "area": "AI, Cloud, Semis, Software"
+    }
+  },
+  {
+    "name": "Palantir Technologies - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001321655&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "PLTR"
+      ],
+      "area": "AI, Cloud, Semis, Software"
+    }
+  },
+  {
+    "name": "JPMorgan Chase - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000019617&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "JPM"
+      ],
+      "area": "Financials and Payments"
+    }
+  },
+  {
+    "name": "Bank of America - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000070858&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "BAC"
+      ],
+      "area": "Financials and Payments"
+    }
+  },
+  {
+    "name": "Goldman Sachs - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000886982&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "GS"
+      ],
+      "area": "Financials and Payments"
+    }
+  },
+  {
+    "name": "Morgan Stanley - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000895421&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "MS"
+      ],
+      "area": "Financials and Payments"
+    }
+  },
+  {
+    "name": "Visa - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001403161&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "V"
+      ],
+      "area": "Financials and Payments"
+    }
+  },
+  {
+    "name": "Mastercard - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001141391&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "MA"
+      ],
+      "area": "Financials and Payments"
+    }
+  },
+  {
+    "name": "Berkshire Hathaway - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001067983&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "BRK-B"
+      ],
+      "area": "Financials and Payments"
+    }
+  },
+  {
+    "name": "Eli Lilly - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000059478&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "LLY"
+      ],
+      "area": "Healthcare and Life Sciences"
+    }
+  },
+  {
+    "name": "UnitedHealth Group - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000731766&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "UNH"
+      ],
+      "area": "Healthcare and Life Sciences"
+    }
+  },
+  {
+    "name": "Johnson & Johnson - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000200406&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "JNJ"
+      ],
+      "area": "Healthcare and Life Sciences"
+    }
+  },
+  {
+    "name": "Merck - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000310158&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "MRK"
+      ],
+      "area": "Healthcare and Life Sciences"
+    }
+  },
+  {
+    "name": "AbbVie - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001551152&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "ABBV"
+      ],
+      "area": "Healthcare and Life Sciences"
+    }
+  },
+  {
+    "name": "Intuitive Surgical - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001035267&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "ISRG"
+      ],
+      "area": "Healthcare and Life Sciences"
+    }
+  },
+  {
+    "name": "Thermo Fisher Scientific - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000097745&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "TMO"
+      ],
+      "area": "Healthcare and Life Sciences"
+    }
+  },
+  {
+    "name": "Home Depot - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000354950&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "HD"
+      ],
+      "area": "Consumer and Media"
+    }
+  },
+  {
+    "name": "Walmart - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000104169&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "WMT"
+      ],
+      "area": "Consumer and Media"
+    }
+  },
+  {
+    "name": "Costco Wholesale - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000909832&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "COST"
+      ],
+      "area": "Consumer and Media"
+    }
+  },
+  {
+    "name": "McDonald's - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000063908&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "MCD"
+      ],
+      "area": "Consumer and Media"
+    }
+  },
+  {
+    "name": "Nike - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000320187&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "NKE"
+      ],
+      "area": "Consumer and Media"
+    }
+  },
+  {
+    "name": "Disney - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001744489&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "DIS"
+      ],
+      "area": "Consumer and Media"
+    }
+  },
+  {
+    "name": "Netflix - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001065280&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "NFLX"
+      ],
+      "area": "Consumer and Media"
+    }
+  },
+  {
+    "name": "Exxon Mobil - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000034088&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "XOM"
+      ],
+      "area": "Energy, Industrials, Materials, Defense"
+    }
+  },
+  {
+    "name": "Chevron - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000093410&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "CVX"
+      ],
+      "area": "Energy, Industrials, Materials, Defense"
+    }
+  },
+  {
+    "name": "SLB - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000087347&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "SLB"
+      ],
+      "area": "Energy, Industrials, Materials, Defense"
+    }
+  },
+  {
+    "name": "GE Aerospace - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000040545&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "GE"
+      ],
+      "area": "Energy, Industrials, Materials, Defense"
+    }
+  },
+  {
+    "name": "Caterpillar - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000018230&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "CAT"
+      ],
+      "area": "Energy, Industrials, Materials, Defense"
+    }
+  },
+  {
+    "name": "Deere - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000315189&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "DE"
+      ],
+      "area": "Energy, Industrials, Materials, Defense"
+    }
+  },
+  {
+    "name": "RTX - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000101829&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "RTX"
+      ],
+      "area": "Energy, Industrials, Materials, Defense"
+    }
+  },
+  {
+    "name": "Lockheed Martin - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000936468&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "LMT"
+      ],
+      "area": "Energy, Industrials, Materials, Defense"
+    }
+  },
+  {
+    "name": "Newmont - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001164727&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "NEM"
+      ],
+      "area": "Energy, Industrials, Materials, Defense"
+    }
+  },
+  {
+    "name": "Linde - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001707925&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "LIN"
+      ],
+      "area": "Energy, Industrials, Materials, Defense"
+    }
+  },
+  {
+    "name": "NextEra Energy - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000753308&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "NEE"
+      ],
+      "area": "Utilities, Telecom, Real Estate Infrastructure"
+    }
+  },
+  {
+    "name": "Southern Company - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000092122&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "SO"
+      ],
+      "area": "Utilities, Telecom, Real Estate Infrastructure"
+    }
+  },
+  {
+    "name": "T-Mobile US - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001283699&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "TMUS"
+      ],
+      "area": "Utilities, Telecom, Real Estate Infrastructure"
+    }
+  },
+  {
+    "name": "American Tower - SEC Company Filings",
+    "provider": "rss",
+    "feed_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001053507&type=8-K&dateb=&owner=include&count=40&output=atom",
+    "category": "company_ir",
+    "trust_score": 0.9,
+    "config": {
+      "max_items": 40,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 1800,
+      "pipeline_tier": "breaking_resources",
+      "tickers": [
+        "AMT"
+      ],
+      "area": "Utilities, Telecom, Real Estate Infrastructure"
+    }
+  },
+  {
+    "name": "Alpha Vantage - Market News Sentiment",
+    "provider": "alpha_vantage",
+    "external_account": "NEWS_SENTIMENT",
+    "category": "market_news",
+    "trust_score": 0.72,
+    "config": {
+      "pipeline_tier": "breaking_resources",
+      "fetch_interval_seconds": 1800,
+      "max_items": 50,
+      "max_item_age_hours": 72,
+      "topics": [
+        "technology",
+        "earnings",
+        "financial_markets",
+        "economy_macro",
+        "ipo",
+        "mergers_and_acquisitions"
+      ],
+      "tickers": [
+        "NVDA",
+        "MSFT",
+        "AAPL",
+        "GOOGL",
+        "AMZN",
+        "META",
+        "AVGO",
+        "AMD",
+        "JPM",
+        "LLY",
+        "XOM"
+      ]
+    }
+  },
+  {
+    "name": "Finnhub - Market News",
+    "provider": "finnhub",
+    "external_account": "market-news",
+    "category": "market_news",
+    "trust_score": 0.72,
+    "config": {
+      "category": "general",
+      "pipeline_tier": "breaking_resources",
+      "fetch_interval_seconds": 1800,
+      "max_items": 50,
+      "max_item_age_hours": 72
+    }
+  },
+  {
+    "name": "Polygon - Ticker News NVDA",
+    "provider": "polygon",
+    "external_account": "NVDA",
+    "category": "market_news",
+    "trust_score": 0.72,
+    "config": {
+      "ticker": "NVDA",
+      "pipeline_tier": "breaking_resources",
+      "fetch_interval_seconds": 1800,
+      "max_items": 50,
+      "max_item_age_hours": 72
+    }
+  },
+  {
+    "name": "Nasdaq - Technology",
+    "provider": "rss",
+    "feed_url": "https://www.nasdaq.com/feed/rssoutbound?category=Technology",
+    "category": "tech",
+    "trust_score": 0.62,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 86400,
+      "pipeline_tier": "daily_resources"
+    }
+  },
+  {
+    "name": "CNBC - Technology",
+    "provider": "rss",
+    "feed_url": "https://www.cnbc.com/id/19854910/device/rss/rss.html",
+    "category": "tech",
+    "trust_score": 0.62,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 86400,
+      "pipeline_tier": "daily_resources"
+    }
+  },
+  {
+    "name": "CNBC - Finance",
+    "provider": "rss",
+    "feed_url": "https://www.cnbc.com/id/10000664/device/rss/rss.html",
+    "category": "finance",
+    "trust_score": 0.62,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 86400,
+      "pipeline_tier": "daily_resources"
+    }
+  },
+  {
+    "name": "CNBC - Economy",
+    "provider": "rss",
+    "feed_url": "https://www.cnbc.com/id/20910258/device/rss/rss.html",
+    "category": "macro",
+    "trust_score": 0.62,
+    "config": {
+      "max_items": 25,
+      "max_item_age_hours": 168,
+      "fetch_interval_seconds": 86400,
+      "pipeline_tier": "daily_resources"
     }
   }
 ]

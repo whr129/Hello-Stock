@@ -6,7 +6,10 @@ import pytest
 from news_agent.graph.nodes import (
     SchedulerNodes,
     _default_sources_from_settings,
+    _exclude_items_for_source,
+    _parse_symbol_csv,
     _related_tickers_for_title,
+    _source_in_pipeline,
     _source_is_due,
 )
 from news_agent.ingestion.providers import NormalizedIngestItem
@@ -125,8 +128,47 @@ def test_source_due_logic_fetches_stale_source() -> None:
     assert _source_is_due(source, settings) is True
 
 
-def test_default_sources_are_empty_unless_configured() -> None:
+def test_parse_symbol_csv_accepts_yahoo_class_tickers() -> None:
+    assert _parse_symbol_csv("AAPL,BRK-B,BRK.B,INVALID!") == ["AAPL", "BRK-B", "BRK.B"]
+
+
+def test_source_pipeline_filter_uses_configured_tier() -> None:
+    breaking = SimpleNamespace(config={"pipeline_tier": "breaking_resources"})
+    daily = SimpleNamespace(config={"pipeline_tier": "daily_resources"})
+    legacy = SimpleNamespace(config={})
+
+    assert _source_in_pipeline(breaking, "breaking_resources") is True
+    assert _source_in_pipeline(daily, "breaking_resources") is False
+    assert _source_in_pipeline(daily, "daily_resources") is True
+    assert _source_in_pipeline(legacy, "breaking_resources") is True
+
+
+def test_exclude_items_for_source_drops_reuters_metadata() -> None:
     settings = Settings(openai_api_key="")
+    articles = [
+        SimpleNamespace(
+            title="Semiconductor demand improves",
+            author="Reuters",
+            account="market-news",
+            provider="finnhub",
+            metadata={"provider_source": "Reuters"},
+        ),
+        SimpleNamespace(
+            title="Cloud capex rises",
+            author="Company Wire",
+            account="market-news",
+            provider="rss",
+            metadata={"provider_source": "Company Wire"},
+        ),
+    ]
+
+    filtered = _exclude_items_for_source({"config": {}}, articles, settings)
+
+    assert [article.title for article in filtered] == ["Cloud capex rises"]
+
+
+def test_default_sources_can_be_disabled() -> None:
+    settings = Settings(openai_api_key="", default_source_pack_enabled=False)
 
     assert _default_sources_from_settings(settings) == []
 
@@ -149,6 +191,20 @@ def test_default_sources_load_from_json_config() -> None:
             "category": "filings",
         }
     ]
+
+
+def test_default_sources_skip_optional_api_sources_without_keys() -> None:
+    settings = Settings(
+        openai_api_key="",
+        default_sources_json=(
+            '[{"name":"Alpha","provider":"alpha_vantage","external_account":"NEWS_SENTIMENT",'
+            '"category":"market_news","config":{"max_items":10}},'
+            '{"name":"RSS","provider":"rss","feed_url":"https://example.com/rss",'
+            '"category":"market_news","config":{"max_items":10}}]'
+        ),
+    )
+
+    assert [source["name"] for source in _default_sources_from_settings(settings)] == ["RSS"]
 
 
 @pytest.mark.asyncio
