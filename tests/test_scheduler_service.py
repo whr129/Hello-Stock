@@ -1,6 +1,14 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
-from news_agent.scheduler.service import RefreshSummary, SchedulerControlService, parse_config_value
+from news_agent.scheduler.service import (
+    RefreshSummary,
+    SchedulerControlService,
+    _due_pipelines,
+    parse_config_value,
+    run_scheduler_tick,
+)
 from news_agent.settings import Settings
 
 
@@ -78,3 +86,77 @@ async def test_can_start_refresh_recovers_stale_running_jobs(monkeypatch) -> Non
 
     assert await service.can_start_refresh() is True
     assert calls == ["recover", "commit", "check"]
+
+
+def test_due_pipelines_respects_intervals_and_market_hours() -> None:
+    settings = Settings(openai_api_key="")
+    now = datetime(2026, 5, 29, 14, 0, tzinfo=UTC)
+    last_runs = {
+        "market_prices": now - timedelta(seconds=599),
+        "breaking_resources": now - timedelta(seconds=1800),
+        "daily_resources": now - timedelta(seconds=3600),
+    }
+
+    assert _due_pipelines(settings, last_runs, now) == ["breaking_resources"]
+
+
+def test_due_pipelines_adds_prices_only_when_market_is_open() -> None:
+    settings = Settings(openai_api_key="")
+
+    assert "market_prices" in _due_pipelines(
+        settings,
+        {},
+        datetime(2026, 5, 29, 14, 0, tzinfo=UTC),
+    )
+    assert "market_prices" not in _due_pipelines(
+        settings,
+        {},
+        datetime(2026, 5, 30, 14, 0, tzinfo=UTC),
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_scheduler_tick_triggers_due_tiered_pipelines(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeSchedulerControlService:
+        session_factory = object()
+
+        def __init__(self, settings) -> None:
+            del settings
+
+        async def can_start_refresh(self) -> bool:
+            return True
+
+        async def run_refresh(self, job_type: str = "manual_refresh"):
+            calls.append(job_type)
+            return RefreshSummary(job_type, 0, 0, 0, 0, {}, [])
+
+        async def cleanup_expired_content(self):
+            calls.append("cleanup")
+            return {}
+
+    class FakeMemoryConsolidationService:
+        def __init__(self, session_factory, settings) -> None:
+            del session_factory, settings
+
+        async def process_due_jobs(self):
+            calls.append("memory")
+
+    monkeypatch.setattr(
+        "news_agent.scheduler.service.SchedulerControlService",
+        FakeSchedulerControlService,
+    )
+    monkeypatch.setattr(
+        "news_agent.scheduler.service.MemoryConsolidationService",
+        FakeMemoryConsolidationService,
+    )
+
+    result = await run_scheduler_tick(
+        Settings(openai_api_key=""),
+        {},
+        now=datetime(2026, 5, 29, 14, 0, tzinfo=UTC),
+    )
+
+    assert calls == ["market_prices", "breaking_resources", "daily_resources", "memory", "cleanup"]
+    assert set(result) == {"market_prices", "breaking_resources", "daily_resources"}

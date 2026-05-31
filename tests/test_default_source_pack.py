@@ -18,8 +18,14 @@ def test_default_source_pack_parses_and_has_required_fields() -> None:
         assert source["name"] not in seen_names
         seen_names.add(source["name"])
 
-        assert source.get("provider") == "rss"
-        assert isinstance(source.get("feed_url"), str) and source["feed_url"].startswith("https://")
+        provider = source.get("provider")
+        assert provider in {"rss", "alpha_vantage", "finnhub", "polygon"}
+        if provider == "rss":
+            assert isinstance(source.get("feed_url"), str) and source["feed_url"].startswith(
+                "https://"
+            )
+        else:
+            assert isinstance(source.get("external_account"), str)
         assert isinstance(source.get("category"), str) and source["category"].strip()
         categories.add(source["category"])
 
@@ -32,6 +38,7 @@ def test_default_source_pack_parses_and_has_required_fields() -> None:
         assert isinstance(config.get("max_items"), int)
         assert isinstance(config.get("max_item_age_hours"), int)
         assert isinstance(config.get("fetch_interval_seconds"), int)
+        assert config.get("pipeline_tier") in {"breaking_resources", "daily_resources"}
 
     assert {
         "macro",
@@ -43,3 +50,15 @@ def test_default_source_pack_parses_and_has_required_fields() -> None:
         "company_ir",
         "market_news",
     }.issubset(categories)
+
+    company_sources = [
+        source
+        for source in sources
+        if source.get("category") == "company_ir"
+        and (source.get("config") or {}).get("pipeline_tier") == "breaking_resources"
+    ]
+    assert len(company_sources) >= 50
+    assert any(
+        (source.get("config") or {}).get("pipeline_tier") == "daily_resources"
+        for source in sources
+    )

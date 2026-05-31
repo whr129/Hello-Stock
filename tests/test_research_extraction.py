@@ -1,4 +1,9 @@
-from news_agent.research.extraction import MentionExtractor, extract_themes, extract_tickers
+from news_agent.research.extraction import (
+    MentionExtractor,
+    extract_sectors,
+    extract_themes,
+    extract_tickers,
+)
 from news_agent.settings import Settings
 
 
@@ -9,9 +14,9 @@ def test_extracts_cashtag_ticker_and_theme() -> None:
         trust_score=0.8,
     )
 
-    assert mentions[0].ticker == "MU"
-    assert mentions[0].theme == "AI infrastructure"
-    assert mentions[0].trust_score == 0.8
+    assert {mention.ticker for mention in mentions} == {"MU"}
+    assert {"AI", "AI infrastructure", "memory chips"} <= {mention.theme for mention in mentions}
+    assert {mention.trust_score for mention in mentions} == {0.8}
 
 
 def test_extracts_related_tickers_from_article_metadata() -> None:
@@ -25,6 +30,14 @@ def test_extracts_related_tickers_from_article_metadata() -> None:
 
 def test_extract_themes_uses_keyword_map() -> None:
     assert "rates" in extract_themes("CPI and Treasury yield pressure returned.")
+
+
+def test_default_sector_config_detects_ai_and_semiconductors() -> None:
+    sectors = extract_sectors(
+        "AI infrastructure demand is lifting semiconductor advanced packaging orders."
+    )
+
+    assert {"AI", "AI infrastructure", "semiconductors"} <= set(sectors)
 
 
 def test_theme_extraction_does_not_match_ai_inside_words() -> None:
@@ -50,13 +63,26 @@ def test_theme_extraction_uses_configured_theme_map() -> None:
     extractor = MentionExtractor(
         Settings(
             openai_api_key="",
-            market_research_theme_config='{"custom theme":["bespoke catalyst"]}',
+            market_research_sector_config='{"custom sector":["bespoke catalyst"]}',
         )
     )
 
     mentions = extractor.extract(text="Bespoke catalyst appears in supplier checks.")
 
-    assert {mention.theme for mention in mentions} == {"custom theme"}
+    assert {mention.theme for mention in mentions} == {"custom sector"}
+
+
+def test_legacy_theme_config_extends_sector_map() -> None:
+    extractor = MentionExtractor(
+        Settings(
+            openai_api_key="",
+            market_research_theme_config='{"legacy theme":["legacy catalyst"]}',
+        )
+    )
+
+    mentions = extractor.extract(text="Legacy catalyst appears in supplier checks.")
+
+    assert {mention.theme for mention in mentions} == {"legacy theme"}
 
 
 async def test_llm_mention_extraction_runs_when_deterministic_has_no_signal() -> None:

@@ -19,7 +19,10 @@ def build_scheduler_graph(session_factory: async_sessionmaker, settings: Setting
         nodes.traced("precompute_summaries", nodes.precompute_summaries),
     )
     graph.add_node("extract_mentions", nodes.traced("extract_mentions", nodes.extract_mentions))
+    graph.add_node("sector_enrichment", nodes.traced("sector_enrichment", nodes.sector_enrichment))
+    graph.add_node("evidence_backfill", nodes.traced("evidence_backfill", nodes.evidence_backfill))
     graph.add_node("score_signals", nodes.traced("score_signals", nodes.score_signals))
+    graph.add_node("confidence_filter", nodes.traced("confidence_filter", nodes.confidence_filter))
     graph.add_node("quality_check", nodes.traced("quality_check", nodes.quality_check))
     graph.add_node(
         "cleanup_market_research",
@@ -33,8 +36,11 @@ def build_scheduler_graph(session_factory: async_sessionmaker, settings: Setting
     graph.add_edge("normalize_dedupe", "embed_store")
     graph.add_edge("embed_store", "precompute_summaries")
     graph.add_edge("precompute_summaries", "extract_mentions")
-    graph.add_edge("extract_mentions", "score_signals")
-    graph.add_edge("score_signals", "quality_check")
+    graph.add_edge("extract_mentions", "sector_enrichment")
+    graph.add_edge("sector_enrichment", "evidence_backfill")
+    graph.add_edge("evidence_backfill", "score_signals")
+    graph.add_edge("score_signals", "confidence_filter")
+    graph.add_edge("confidence_filter", "quality_check")
     graph.add_edge("quality_check", "cleanup_market_research")
     graph.add_edge("cleanup_market_research", "retry_or_recover")
     graph.add_edge("retry_or_recover", END)

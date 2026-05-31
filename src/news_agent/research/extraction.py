@@ -5,18 +5,8 @@ from collections.abc import Iterable
 from openai import APIError, APITimeoutError, AsyncOpenAI
 
 from news_agent.research.schemas import ExtractedMention
-from news_agent.settings import Settings
+from news_agent.settings import DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG, Settings
 
-DEFAULT_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "AI infrastructure": ("ai", "artificial intelligence", "gpu", "data center", "datacenter"),
-    "memory chips": ("hbm", "dram", "nand", "memory chip", "memory demand"),
-    "cloud capex": ("cloud capex", "capital expenditure", "hyperscaler", "cloud spending"),
-    "rates": ("fed", "treasury yield", "rate cut", "rate hike", "inflation", "cpi"),
-    "regional banks": ("regional bank", "deposit", "commercial real estate"),
-    "energy supply": ("oil", "natural gas", "opec", "lng", "energy supply"),
-    "obesity drugs": ("glp-1", "obesity", "weight loss drug"),
-    "defense spending": ("defense", "missile", "military contract", "geopolitical"),
-}
 TOKEN_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9&.-]{1,}\b")
 CASHTAG_PATTERN = re.compile(r"\$([A-Za-z]{1,5})(?:\b|$)")
 BARE_UPPERCASE_TICKER_PATTERN = re.compile(r"\b([A-Z]{2,5})\b")
@@ -39,10 +29,11 @@ DEFAULT_NON_ENTITY_TICKERS = {
 class MentionExtractor:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings
-        self.theme_keywords = _theme_keywords_from_settings(settings)
-        self.blocked_tickers = _csv_set(
-            settings.market_research_blocked_tickers if settings else ""
-        ) or DEFAULT_NON_ENTITY_TICKERS
+        self.theme_keywords = sector_keywords_from_settings(settings)
+        self.blocked_tickers = (
+            _csv_set(settings.market_research_blocked_tickers if settings else "")
+            or DEFAULT_NON_ENTITY_TICKERS
+        )
         self.allowed_single_letter_tickers = _csv_set(
             settings.market_research_allowed_single_letter_tickers if settings else ""
         )
@@ -263,13 +254,20 @@ def extract_themes(
     theme_keywords: dict[str, tuple[str, ...]] | None = None,
 ) -> list[str]:
     lowered = text.lower()
-    keyword_map = theme_keywords or DEFAULT_THEME_KEYWORDS
+    keyword_map = theme_keywords or sector_keywords_from_settings()
     themes = [
         theme
         for theme, keywords in keyword_map.items()
         if any(_keyword_matches(lowered, keyword) for keyword in keywords)
     ]
     return themes
+
+
+def extract_sectors(
+    text: str,
+    sector_keywords: dict[str, tuple[str, ...]] | None = None,
+) -> list[str]:
+    return extract_themes(text, sector_keywords)
 
 
 def extract_tickers(text: str) -> list[str]:
@@ -313,15 +311,26 @@ def _keyword_matches(lowered_text: str, keyword: str) -> bool:
     return bool(re.search(rf"(?<!\w){re.escape(keyword.lower())}(?!\w)", lowered_text))
 
 
-def _theme_keywords_from_settings(settings: Settings | None) -> dict[str, tuple[str, ...]]:
+def sector_keywords_from_settings(settings: Settings | None = None) -> dict[str, tuple[str, ...]]:
+    parsed = _parse_keyword_config(DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG)
     if settings is None:
-        return DEFAULT_THEME_KEYWORDS
+        return parsed
+    configured_sectors = _parse_keyword_config(settings.market_research_sector_config)
+    if configured_sectors:
+        parsed = configured_sectors
+    configured_themes = _parse_keyword_config(settings.market_research_theme_config)
+    if configured_themes:
+        parsed.update(configured_themes)
+    return parsed
+
+
+def _parse_keyword_config(value: str) -> dict[str, tuple[str, ...]]:
     try:
-        payload = json.loads(settings.market_research_theme_config)
+        payload = json.loads(value or "{}")
     except json.JSONDecodeError:
-        return DEFAULT_THEME_KEYWORDS
+        return {}
     if not isinstance(payload, dict):
-        return DEFAULT_THEME_KEYWORDS
+        return {}
     parsed: dict[str, tuple[str, ...]] = {}
     for theme, keywords in payload.items():
         if not isinstance(theme, str):
@@ -331,7 +340,7 @@ def _theme_keywords_from_settings(settings: Settings | None) -> dict[str, tuple[
         values = tuple(str(item).strip().lower() for item in keywords if str(item).strip())
         if values:
             parsed[theme] = values
-    return parsed or DEFAULT_THEME_KEYWORDS
+    return parsed
 
 
 def _csv_set(value: str) -> set[str]:

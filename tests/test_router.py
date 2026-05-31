@@ -1,4 +1,4 @@
-from news_agent.agent.router import parse_message, route_request
+from news_agent.agent.router import parse_message, route_request, skills_response
 
 
 def test_parse_command_intent() -> None:
@@ -119,6 +119,18 @@ def test_route_skills_to_news_skills_capability() -> None:
 
     assert route.agents == ("news",)
     assert route.capabilities == ("skills",)
+
+
+def test_skills_response_is_compact_and_includes_pipeline_trigger() -> None:
+    response = skills_response()
+
+    assert "Research:" in response
+    assert "Sources:" in response
+    assert "Source packs: /sourcepack [category]" in response
+    assert "Pipelines:" in response
+    assert "/refresh [market_prices|breaking_resources|daily_resources|all]" in response
+    assert "/refresh prices" in response
+    assert "General web questions" not in response
 
 
 def test_route_resources_to_news_inventory_capability() -> None:
