@@ -53,7 +53,7 @@ class NewsSubagent:
     def __init__(self, session_factory: async_sessionmaker, settings: Settings) -> None:
         self.session_factory = session_factory
         self.settings = settings
-        self.ingest_registry = IngestProviderRegistry()
+        self.ingest_registry = IngestProviderRegistry(settings)
         self.scheduler_control = SchedulerControlService(settings)
         self.memory_service = MemoryConsolidationService(session_factory, settings)
 
@@ -76,7 +76,7 @@ class NewsSubagent:
         if "resource_inventory" in capabilities:
             return await self._resource_inventory(state)
         if "scheduler_admin" in capabilities:
-            return await self._scheduler_admin()
+            return await self._scheduler_admin(state)
         if "source_admin" in capabilities:
             return await self._source_admin(state)
         if "memory_admin" in capabilities:
@@ -90,16 +90,22 @@ class NewsSubagent:
             "metadata": {"capability": "help"},
         }
 
-    async def _scheduler_admin(self) -> AgentResult:
+    async def _scheduler_admin(self, state: SupervisorState) -> AgentResult:
+        pipeline = _parse_refresh_pipeline(state.get("args", []))
+        if pipeline is None:
+            return {
+                "response": _refresh_usage(),
+                "metadata": {"capability": "scheduler_admin", "status": "invalid_pipeline"},
+            }
         if not await self.scheduler_control.can_start_refresh():
             return {
                 "response": "A refresh job is already running. Try again in a moment.",
                 "metadata": {"capability": "scheduler_admin"},
             }
-        summary = await self.scheduler_control.run_refresh()
+        summary = await self.scheduler_control.run_refresh(job_type=pipeline)
         return {
             "response": self.scheduler_control.format_refresh_summary(summary),
-            "metadata": {"capability": "scheduler_admin"},
+            "metadata": {"capability": "scheduler_admin", "pipeline": pipeline},
         }
 
     async def _source_admin(self, state: SupervisorState) -> AgentResult:
@@ -136,9 +142,19 @@ class NewsSubagent:
                     }
                 provider = args[0].lower()
                 external_account = args[1]
-                if provider not in {"rss", "twitter", "newsletter"}:
+                if provider not in {
+                    "rss",
+                    "twitter",
+                    "newsletter",
+                    "alpha_vantage",
+                    "finnhub",
+                    "polygon",
+                }:
                     return {
-                        "response": "Supported source providers: rss, twitter, newsletter.",
+                        "response": (
+                            "Supported source providers: rss, twitter, newsletter, "
+                            "alpha_vantage, finnhub, polygon."
+                        ),
                         "metadata": {"capability": "source_admin"},
                     }
                 config = {"feed_url": external_account} if provider == "rss" else {}
@@ -630,7 +646,44 @@ def _source_config_warning(provider: str, config: dict | None) -> str:
         return "This X.com source is feed-backed; no official X API key is used."
     if normalized == "newsletter":
         return "This newsletter source is feed-backed."
+    if normalized == "alpha_vantage":
+        return "Set ALPHA_VANTAGE_API_KEY or config.api_key before fetching."
+    if normalized == "finnhub":
+        return "Set FINNHUB_API_KEY or config.api_key before fetching."
+    if normalized == "polygon":
+        return "Set POLYGON_API_KEY or config.api_key before fetching."
     return ""
+
+
+def _parse_refresh_pipeline(args: list[str]) -> str | None:
+    if not args:
+        return "manual_refresh"
+    normalized = args[0].strip().lower().replace("-", "_")
+    aliases = {
+        "all": "manual_refresh",
+        "manual": "manual_refresh",
+        "manual_refresh": "manual_refresh",
+        "market": "market_prices",
+        "price": "market_prices",
+        "prices": "market_prices",
+        "market_price": "market_prices",
+        "market_prices": "market_prices",
+        "breaking": "breaking_resources",
+        "important": "breaking_resources",
+        "resources": "breaking_resources",
+        "breaking_resources": "breaking_resources",
+        "daily": "daily_resources",
+        "general": "daily_resources",
+        "daily_resources": "daily_resources",
+    }
+    return aliases.get(normalized)
+
+
+def _refresh_usage() -> str:
+    return (
+        "Usage: /refresh [market_prices|breaking_resources|daily_resources|all]. "
+        "Aliases: prices, breaking, daily."
+    )
 
 
 def _format_source_pack(args: list[str] | None = None) -> str:

@@ -34,7 +34,7 @@ async def scheduler_loop(settings: Settings) -> None:
         "scheduler loop starting",
         extra={"tick_seconds": settings.scheduler_tick_seconds},
     )
-    last_refresh_at: datetime | None = None
+    last_refresh_at: dict[str, datetime] | None = None
     while True:
         last_refresh_at = await run_scheduler_tick(settings, last_refresh_at)
         logger.info(

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from news_agent.markets.hours import is_us_market_open
 from news_agent.memory.consolidation import MemoryConsolidationService
 from news_agent.settings import Settings
 from news_agent.storage.database import create_session_factory
@@ -24,6 +25,9 @@ class RefreshSummary:
     error_count: int
     provider_counts: dict[str, int]
     errors: list[str]
+
+
+PipelineRunState = dict[str, datetime]
 
 
 def parse_config_value(raw: str) -> object:
@@ -50,7 +54,12 @@ class SchedulerControlService:
     async def can_start_refresh(self) -> bool:
         async with self.session_factory() as session:
             stale_cutoff = datetime.now(UTC) - timedelta(
-                seconds=max(self.settings.news_fetch_interval_seconds * 2, 300)
+                seconds=max(
+                    self.settings.news_fetch_interval_seconds * 2,
+                    self.settings.market_price_pipeline_interval_seconds * 2,
+                    self.settings.breaking_resources_pipeline_interval_seconds * 2,
+                    300,
+                )
             )
             await JobRepository(session).recover_stale_running_jobs(stale_cutoff)
             await session.commit()
@@ -123,16 +132,71 @@ class SchedulerControlService:
         }
 
 
-async def run_scheduler_tick(settings: Settings, last_refresh_at: datetime | None) -> datetime:
+async def run_scheduler_tick(
+    settings: Settings,
+    last_refresh_at: PipelineRunState | datetime | None,
+    *,
+    now: datetime | None = None,
+) -> PipelineRunState:
     control = SchedulerControlService(settings)
     memory_service = MemoryConsolidationService(control.session_factory, settings)
-    now = datetime.now(UTC)
-    refresh_due = last_refresh_at is None or (
-        now - last_refresh_at
-    ) >= timedelta(seconds=settings.news_fetch_interval_seconds)
-    if refresh_due and await control.can_start_refresh():
-        await control.run_refresh(job_type="market_research_refresh")
-        last_refresh_at = now
+    now = now or datetime.now(UTC)
+    last_runs = _coerce_pipeline_run_state(last_refresh_at)
+
+    for pipeline_name in _due_pipelines(settings, last_runs, now):
+        if await control.can_start_refresh():
+            await control.run_refresh(job_type=pipeline_name)
+            last_runs[pipeline_name] = now
+
     await memory_service.process_due_jobs()
     await control.cleanup_expired_content()
-    return last_refresh_at or now
+    return last_runs
+
+
+def _coerce_pipeline_run_state(value: PipelineRunState | datetime | None) -> PipelineRunState:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, datetime):
+        return {
+            "market_prices": value,
+            "breaking_resources": value,
+            "daily_resources": value,
+        }
+    return {}
+
+
+def _due_pipelines(
+    settings: Settings,
+    last_runs: PipelineRunState,
+    now: datetime,
+) -> list[str]:
+    due: list[str] = []
+    if is_us_market_open(now) and _pipeline_due(
+        last_runs.get("market_prices"),
+        now,
+        settings.market_price_pipeline_interval_seconds,
+    ):
+        due.append("market_prices")
+    if _pipeline_due(
+        last_runs.get("breaking_resources"),
+        now,
+        settings.breaking_resources_pipeline_interval_seconds,
+    ):
+        due.append("breaking_resources")
+    if _pipeline_due(
+        last_runs.get("daily_resources"),
+        now,
+        settings.daily_resources_pipeline_interval_seconds,
+    ):
+        due.append("daily_resources")
+    return due
+
+
+def _pipeline_due(last_run_at: datetime | None, now: datetime, interval_seconds: int) -> bool:
+    if last_run_at is None:
+        return True
+    if last_run_at.tzinfo is None:
+        last_run_at = last_run_at.replace(tzinfo=UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    return (now - last_run_at).total_seconds() >= max(interval_seconds, 0)

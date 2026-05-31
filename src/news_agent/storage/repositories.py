@@ -184,6 +184,7 @@ class SourceRepository:
         config: dict | None = None,
         field_mapping: dict | None = None,
         fetch_mode: str | None = None,
+        trust_score: float | None = None,
     ) -> Source:
         normalized_provider = provider.strip().lower()
         normalized_account = external_account.strip()
@@ -200,6 +201,8 @@ class SourceRepository:
                 source.field_mapping = {**dict(source.field_mapping or {}), **field_mapping}
             if fetch_mode is not None:
                 source.fetch_mode = fetch_mode
+            if trust_score is not None:
+                source.trust_score = trust_score
             await self.session.flush()
             return source
 
@@ -213,6 +216,7 @@ class SourceRepository:
             fetch_mode=fetch_mode or ("rss" if normalized_provider == "rss" else None),
             category=category,
             owner_user_id=owner_user_id,
+            trust_score=trust_score if trust_score is not None else 0.5,
         )
         self.session.add(source)
         await self.session.flush()
@@ -291,7 +295,10 @@ class SourceRepository:
                     external_account=external_account,
                     category=str(item.get("category") or "markets"),
                     config=config,
-                    fetch_mode=str(item.get("fetch_mode") or "rss"),
+                    fetch_mode=str(
+                        item.get("fetch_mode")
+                        or ("rss" if provider in {"rss", "twitter", "newsletter"} else provider)
+                    ),
                     trust_score=float(item.get("trust_score") or 0.5),
                 )
             )

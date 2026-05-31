@@ -3,6 +3,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -22,6 +23,8 @@ from news_agent.observability.runtime import (
 )
 from news_agent.research.scheduler import (
     backfill_signal_evidence_links,
+    count_confident_signal_context,
+    enrich_market_sectors,
     extract_market_mentions,
     prune_market_research_data,
     score_market_signals,
@@ -41,6 +44,9 @@ from news_agent.storage.repositories import (
 from news_agent.summarizer.service import Summarizer, SummaryRequest
 
 logger = logging.getLogger(__name__)
+DEFAULT_SOURCE_PACK_PATH = (
+    Path(__file__).resolve().parents[3] / "docs" / "market-research" / "default-sources.json"
+)
 
 
 def _source_dict_to_model(payload: dict[str, Any]) -> Source:
@@ -67,7 +73,7 @@ class SchedulerNodes:
         self.market_provider = YahooMarketDataProvider()
         self.summarizer = Summarizer(settings)
         self.embedding_service = EmbeddingService(settings)
-        self.ingest_registry = IngestProviderRegistry()
+        self.ingest_registry = IngestProviderRegistry(settings)
         self.market_impact_classifier = MarketImpactClassifier(settings)
         self.trace_service = RuntimeTraceService(session_factory, settings)
         self.alert_service = RuntimeAlertService(session_factory, settings)
@@ -248,7 +254,11 @@ class SchedulerNodes:
 
     async def load_due_sources(self, state: SchedulerState) -> SchedulerState:
         job_type = state.get("job_type", "market_research_refresh")
-        logger.info("scheduler loading due work", extra={"job_type": job_type})
+        pipeline_scope = _pipeline_scope(job_type, state.get("pipeline_scope"))
+        logger.info(
+            "scheduler loading due work",
+            extra={"job_type": job_type, "pipeline_scope": pipeline_scope},
+        )
         async with self.session_factory() as session:
             source_repo = SourceRepository(session)
             sources = await source_repo.list_all_enabled()
@@ -262,8 +272,22 @@ class SchedulerNodes:
                     )
                     sources = await source_repo.ensure_default_sources(default_sources)
                     enabled_source_count = len(sources)
-            sources = [source for source in sources if _source_is_due(source, self.settings)]
-            tickers = await self._market_universe_symbols(session)
+            if pipeline_scope == "market_prices":
+                sources = []
+            elif pipeline_scope in {"breaking_resources", "daily_resources"}:
+                sources = [
+                    source
+                    for source in sources
+                    if _source_in_pipeline(source, pipeline_scope)
+                    and _source_is_due(source, self.settings)
+                ]
+            else:
+                sources = [source for source in sources if _source_is_due(source, self.settings)]
+            tickers = (
+                await self._market_universe_symbols(session)
+                if pipeline_scope in {"all", "market_prices"}
+                else []
+            )
             job = await JobRepository(session).start(job_type)
             await session.commit()
 
@@ -302,6 +326,7 @@ class SchedulerNodes:
             "errors": state.get("errors", []),
             "metadata": {
                 **state.get("metadata", {}),
+                "pipeline_scope": pipeline_scope,
                 "fetch_metrics": {
                     "sources": {
                         "enabled": enabled_source_count,
@@ -382,6 +407,7 @@ class SchedulerNodes:
                     ),
                 )
                 articles = _limit_articles_for_source(source, articles, self.settings)
+                articles = _exclude_items_for_source(source, articles, self.settings)
                 retry_count = max(len(attempts) - 1, 0)
                 fetch_metrics["retry_count"] += retry_count
                 source_metrics["succeeded"] += 1
@@ -695,6 +721,11 @@ class SchedulerNodes:
         return {**state, "saved_articles": saved_articles, "metadata": metadata}
 
     async def embed_store(self, state: SchedulerState) -> SchedulerState:
+        pipeline_scope = _pipeline_scope(state.get("job_type", ""), state.get("pipeline_scope"))
+        if pipeline_scope == "market_prices":
+            logger.info("scheduler skipping embeddings for market price pipeline")
+            return {**state, "summaries": state.get("summaries", [])}
+
         saved_articles = state.get("saved_articles", [])
         if not saved_articles:
             logger.info("scheduler skipping article embeddings; no new articles")
@@ -732,6 +763,11 @@ class SchedulerNodes:
         return state
 
     async def precompute_summaries(self, state: SchedulerState) -> SchedulerState:
+        pipeline_scope = _pipeline_scope(state.get("job_type", ""), state.get("pipeline_scope"))
+        if pipeline_scope == "market_prices":
+            logger.info("scheduler skipping summaries for market price pipeline")
+            return {**state, "summaries": []}
+
         summaries: list[str] = []
         async with self.session_factory() as session:
             articles = await ArticleRepository(session).list_without_summaries(limit=20)
@@ -789,22 +825,56 @@ class SchedulerNodes:
         return state
 
     async def extract_mentions(self, state: SchedulerState) -> SchedulerState:
+        pipeline_scope = _pipeline_scope(state.get("job_type", ""), state.get("pipeline_scope"))
+        if pipeline_scope == "market_prices":
+            return state
+
         async with self.session_factory() as session:
             count = await extract_market_mentions(session, self.settings, limit=100)
             await session.commit()
         metadata = {**state.get("metadata", {}), "mention_count": count}
         return {**state, "metadata": metadata}
 
-    async def score_signals(self, state: SchedulerState) -> SchedulerState:
+    async def sector_enrichment(self, state: SchedulerState) -> SchedulerState:
+        pipeline_scope = _pipeline_scope(state.get("job_type", ""), state.get("pipeline_scope"))
+        if pipeline_scope == "market_prices":
+            return state
+
         async with self.session_factory() as session:
-            backfilled = await backfill_signal_evidence_links(session)
+            count = await enrich_market_sectors(session, self.settings)
+        metadata = {**state.get("metadata", {}), "sector_context_count": count}
+        return {**state, "metadata": metadata}
+
+    async def evidence_backfill(self, state: SchedulerState) -> SchedulerState:
+        pipeline_scope = _pipeline_scope(state.get("job_type", ""), state.get("pipeline_scope"))
+        if pipeline_scope == "market_prices":
+            return state
+
+        async with self.session_factory() as session:
+            count = await backfill_signal_evidence_links(session)
+            await session.commit()
+        metadata = {**state.get("metadata", {}), "signal_evidence_backfill_count": count}
+        return {**state, "metadata": metadata}
+
+    async def score_signals(self, state: SchedulerState) -> SchedulerState:
+        pipeline_scope = _pipeline_scope(state.get("job_type", ""), state.get("pipeline_scope"))
+        if pipeline_scope == "market_prices":
+            return state
+
+        async with self.session_factory() as session:
             count = await score_market_signals(session, self.settings)
             await session.commit()
-        metadata = {
-            **state.get("metadata", {}),
-            "signal_count": count,
-            "signal_evidence_backfill_count": backfilled,
-        }
+        metadata = {**state.get("metadata", {}), "signal_count": count}
+        return {**state, "metadata": metadata}
+
+    async def confidence_filter(self, state: SchedulerState) -> SchedulerState:
+        pipeline_scope = _pipeline_scope(state.get("job_type", ""), state.get("pipeline_scope"))
+        if pipeline_scope == "market_prices":
+            return state
+
+        async with self.session_factory() as session:
+            count = await count_confident_signal_context(session, self.settings)
+        metadata = {**state.get("metadata", {}), "confident_signal_count": count}
         return {**state, "metadata": metadata}
 
     async def cleanup_market_research(self, state: SchedulerState) -> SchedulerState:
@@ -846,7 +916,7 @@ def _parse_symbol_csv(value: str) -> list[str]:
     return [
         item.strip().upper()
         for item in value.split(",")
-        if item.strip() and item.strip().replace(".", "").isalpha()
+        if item.strip() and re.fullmatch(r"[A-Za-z][A-Za-z0-9.-]{0,14}", item.strip())
     ]
 
 
@@ -865,6 +935,30 @@ def _source_is_due(source: Source, settings: Settings, now: datetime | None = No
     return (now - last_fetched_at).total_seconds() >= max(interval, 0)
 
 
+def _pipeline_scope(job_type: str, explicit_scope: object = None) -> str:
+    if isinstance(explicit_scope, str) and explicit_scope.strip():
+        return explicit_scope.strip()
+    if job_type in {"market_prices", "breaking_resources", "daily_resources"}:
+        return job_type
+    return "all"
+
+
+def _source_in_pipeline(source: Source, pipeline_scope: str) -> bool:
+    config = dict(source.config or {})
+    raw_tier = config.get("pipeline_tier") or config.get("pipeline_tiers")
+    if raw_tier is None:
+        return pipeline_scope == "breaking_resources"
+    if isinstance(raw_tier, list):
+        tiers = {str(item).strip().lower() for item in raw_tier if str(item).strip()}
+    else:
+        tiers = {item.strip().lower() for item in str(raw_tier).split(",") if item.strip()}
+    aliases = {
+        "breaking_resources": {"breaking", "breaking_resources", "important"},
+        "daily_resources": {"daily", "daily_resources", "general"},
+    }
+    return bool(tiers & aliases.get(pipeline_scope, {pipeline_scope}))
+
+
 def _limit_articles_for_source(source: dict[str, Any], articles: list, settings: Settings) -> list:
     config = dict(source.get("config") or {})
     max_items = _config_int(config, "max_items", settings.source_max_items_per_fetch)
@@ -878,6 +972,43 @@ def _limit_articles_for_source(source: dict[str, Any], articles: list, settings:
     return filtered[: max(max_items, 0)]
 
 
+def _exclude_items_for_source(source: dict[str, Any], articles: list, settings: Settings) -> list:
+    config = dict(source.get("config") or {})
+    excluded_names = _excluded_source_names(config, settings)
+    if not excluded_names:
+        return articles
+    return [
+        article
+        for article in articles
+        if not _article_matches_excluded_name(article, excluded_names)
+    ]
+
+
+def _excluded_source_names(config: dict[str, Any], settings: Settings) -> set[str]:
+    values: list[str] = []
+    raw_config = config.get("excluded_sources") or config.get("exclude_sources")
+    if isinstance(raw_config, list):
+        values.extend(str(item) for item in raw_config)
+    elif isinstance(raw_config, str):
+        values.extend(raw_config.split(","))
+    values.extend(settings.source_excluded_names.split(","))
+    return {value.strip().lower() for value in values if value.strip()}
+
+
+def _article_matches_excluded_name(article, excluded_names: set[str]) -> bool:
+    haystack = [
+        getattr(article, "author", None),
+        getattr(article, "account", None),
+        getattr(article, "provider", None),
+        getattr(article, "title", None),
+    ]
+    metadata = getattr(article, "metadata", {}) or {}
+    if isinstance(metadata, dict):
+        haystack.extend(str(value) for value in metadata.values() if value is not None)
+    text = " ".join(str(value) for value in haystack if value).lower()
+    return any(name in text for name in excluded_names)
+
+
 def _config_int(config: dict[str, Any], key: str, default: int) -> int:
     try:
         return int(config.get(key, default))
@@ -888,7 +1019,13 @@ def _config_int(config: dict[str, Any], key: str, default: int) -> int:
 def _default_sources_from_settings(settings: Settings) -> list[dict[str, object]]:
     raw = settings.default_sources_json.strip()
     if not raw:
-        return []
+        if not settings.default_source_pack_enabled:
+            return []
+        try:
+            raw = DEFAULT_SOURCE_PACK_PATH.read_text()
+        except OSError:
+            logger.warning("default source pack could not be read")
+            return []
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
@@ -897,7 +1034,23 @@ def _default_sources_from_settings(settings: Settings) -> list[dict[str, object]
     if not isinstance(parsed, list):
         logger.warning("DEFAULT_SOURCES_JSON must be a JSON array")
         return []
-    return [item for item in parsed if isinstance(item, dict)]
+    return [
+        item
+        for item in parsed
+        if isinstance(item, dict) and _source_has_required_credentials(item, settings)
+    ]
+
+
+def _source_has_required_credentials(item: dict[str, object], settings: Settings) -> bool:
+    provider = str(item.get("provider") or "").strip().lower()
+    config = dict(item.get("config") or {})
+    if provider == "alpha_vantage":
+        return bool(config.get("api_key") or settings.alpha_vantage_api_key)
+    if provider == "finnhub":
+        return bool(config.get("api_key") or settings.finnhub_api_key)
+    if provider == "polygon":
+        return bool(config.get("api_key") or settings.polygon_api_key)
+    return True
 
 
 def _aware_datetime(value: datetime) -> datetime:
@@ -919,7 +1072,15 @@ def _related_tickers_for_title(title: str, due_tickers: set[str]) -> list[str]:
 
 
 def _is_refresh_workflow(workflow: str) -> bool:
-    return workflow in {"market_research_refresh", "manual_refresh", "news_refresh", "scheduler"}
+    return workflow in {
+        "market_research_refresh",
+        "manual_refresh",
+        "news_refresh",
+        "scheduler",
+        "market_prices",
+        "breaking_resources",
+        "daily_resources",
+    }
 
 
 def _ensure_fetch_metrics(metadata: dict[str, Any]) -> dict[str, Any]:
