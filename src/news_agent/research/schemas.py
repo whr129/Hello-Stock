@@ -21,6 +21,7 @@ ResearchAgentName = Literal[
     "report",
 ]
 ResearchOutputFormat = Literal["telegram_summary", "long_report", "alert", "pdf_later"]
+EvidenceStrength = Literal["strong", "developing", "weak"]
 
 
 @dataclass(frozen=True)
@@ -33,7 +34,7 @@ class ResearchEntities:
 
 @dataclass(frozen=True)
 class ResearchConstraints:
-    max_candidates: int = 5
+    max_candidates: int = 3
     minimum_confidence: float = 0.0
     source_families: list[str] = field(default_factory=list)
     include_weak_evidence: bool = True
@@ -109,6 +110,11 @@ class CandidateExplanation:
     evidence: list[dict[str, object]]
     weak_evidence: list[str]
     created_at: datetime | None = None
+    evidence_strength: EvidenceStrength = "weak"
+    distinct_source_count: int = 0
+    linked_source_count: int = 0
+    max_trust_score: float = 0.0
+    suppression_reasons: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

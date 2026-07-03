@@ -1,7 +1,10 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 
-from news_agent.research.schemas import CandidateExplanation
+from news_agent.research.schemas import CandidateExplanation, EvidenceStrength
 from news_agent.storage.models import MarketSignalSnapshot
+
+HIGH_TRUST_DIRECT_SOURCE_THRESHOLD = 0.95
 
 
 def explain_candidates(
@@ -17,6 +20,8 @@ def explain_candidates(
     for index, snapshot in enumerate(filtered, start=1):
         components = dict(snapshot.component_scores or {})
         evidence = list(snapshot.evidence or [])
+        profile = _evidence_profile(evidence)
+        strength = _evidence_strength(snapshot, profile)
         explanations.append(
             CandidateExplanation(
                 ticker=snapshot.ticker,
@@ -27,9 +32,29 @@ def explain_candidates(
                 evidence=evidence,
                 weak_evidence=_weak_evidence(snapshot, evidence),
                 created_at=snapshot.created_at,
+                evidence_strength=strength,
+                distinct_source_count=profile["distinct_source_count"],
+                linked_source_count=profile["linked_source_count"],
+                max_trust_score=profile["max_trust_score"],
+                suppression_reasons=_suppression_reasons(strength, profile),
             )
         )
     return explanations
+
+
+def visible_candidate_explanations(
+    explanations: list[CandidateExplanation],
+    *,
+    limit: int,
+) -> list[CandidateExplanation]:
+    visible = []
+    seen: set[tuple[str | None, str | None]] = set()
+    for item in explanations:
+        key = (item.ticker, item.theme)
+        if item.evidence_strength == "strong" and key not in seen:
+            visible.append(item)
+            seen.add(key)
+    return [replace(item, rank=index) for index, item in enumerate(visible[:limit], start=1)]
 
 
 def _weak_evidence(snapshot: MarketSignalSnapshot, evidence: list[dict[str, object]]) -> list[str]:
@@ -62,6 +87,86 @@ def _weak_evidence(snapshot: MarketSignalSnapshot, evidence: list[dict[str, obje
     if snapshot.total_score < 50.0:
         weaknesses.append("overall signal is below high-confidence threshold")
     return weaknesses or ["evidence is still a weak signal and may be noisy or stale"]
+
+
+def _evidence_profile(evidence: list[dict[str, object]]) -> dict[str, object]:
+    named_sources = {
+        item.get("source_name") or item.get("source_family") or item.get("source_provider")
+        for item in evidence
+        if item.get("source_name") or item.get("source_family") or item.get("source_provider")
+    }
+    linked_sources = {
+        item.get("article_url")
+        for item in evidence
+        if isinstance(item.get("article_url"), str) and item.get("article_url")
+    }
+    trust_scores = [_trust_score(item) for item in evidence]
+    return {
+        "distinct_source_count": len(named_sources),
+        "linked_source_count": len(linked_sources),
+        "max_trust_score": max(trust_scores, default=0.0),
+        "has_direct_high_impact": any(_is_direct_high_impact(item) for item in evidence),
+    }
+
+
+def _evidence_strength(
+    snapshot: MarketSignalSnapshot,
+    profile: dict[str, object],
+) -> EvidenceStrength:
+    distinct_source_count = int(profile["distinct_source_count"])
+    linked_source_count = int(profile["linked_source_count"])
+    max_trust_score = float(profile["max_trust_score"])
+    has_direct_high_impact = bool(profile["has_direct_high_impact"])
+    if distinct_source_count >= 2 and linked_source_count >= 2:
+        return "strong"
+    if max_trust_score >= HIGH_TRUST_DIRECT_SOURCE_THRESHOLD and has_direct_high_impact:
+        return "strong"
+    if linked_source_count >= 1 and snapshot.total_score >= 50:
+        return "developing"
+    return "weak"
+
+
+def _suppression_reasons(
+    strength: EvidenceStrength,
+    profile: dict[str, object],
+) -> list[str]:
+    if strength != "weak":
+        return []
+    reasons = []
+    if int(profile["linked_source_count"]) < 1:
+        reasons.append("no verified link-backed evidence candidate")
+    if int(profile["distinct_source_count"]) < 2:
+        reasons.append("not enough distinct sources for a strong candidate")
+    if float(profile["max_trust_score"]) < HIGH_TRUST_DIRECT_SOURCE_THRESHOLD:
+        reasons.append("no high-trust direct source")
+    return reasons
+
+
+def _trust_score(item: dict[str, object]) -> float:
+    try:
+        return float(item.get("trust_score") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_direct_high_impact(item: dict[str, object]) -> bool:
+    source_family = str(item.get("source_family") or "").lower()
+    source_provider = str(item.get("source_provider") or "").lower()
+    source_name = str(item.get("source_name") or "").lower()
+    title = str(item.get("article_title") or "").lower()
+    direct_markers = {
+        "filings",
+        "filing",
+        "regulatory",
+        "macro",
+        "company",
+        "official",
+        "earnings",
+    }
+    if source_family in direct_markers or source_provider in direct_markers:
+        return True
+    direct_names = ("sec", "nvidia", "federal reserve", "treasury", "bls", "bea")
+    return any(marker in source_name or marker in title for marker in direct_names)
 
 
 def _is_stale(created_at) -> bool:

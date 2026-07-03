@@ -28,6 +28,15 @@ def test_extracts_related_tickers_from_article_metadata() -> None:
     assert {mention.ticker for mention in mentions} == {"MSFT"}
 
 
+def test_related_tickers_from_metadata_require_configured_market_universe() -> None:
+    mentions = MentionExtractor(Settings(openai_api_key="")).extract(
+        text="Index metadata arrived with AI demand context.",
+        related_tickers=["spx", "iuxx", "nvda"],
+    )
+
+    assert {mention.ticker for mention in mentions} == {"NVDA"}
+
+
 def test_extract_themes_uses_keyword_map() -> None:
     assert "rates" in extract_themes("CPI and Treasury yield pressure returned.")
 
@@ -57,6 +66,24 @@ def test_research_ticker_extraction_ignores_chat_direct_words() -> None:
 
 def test_research_ticker_extraction_allows_explicit_one_letter_cashtags() -> None:
     assert extract_tickers("$V volume rises while payments expand.") == ["V"]
+
+
+def test_bare_ticker_extraction_requires_configured_market_universe() -> None:
+    extractor = MentionExtractor(Settings(openai_api_key=""))
+
+    mentions = extractor.extract(
+        text="KB FD MB and INC appear in SEC filing boilerplate while NVDA invests in AI servers."
+    )
+
+    assert {mention.ticker for mention in mentions} == {"NVDA"}
+
+
+def test_source_ingestion_cashtags_require_configured_market_universe() -> None:
+    extractor = MentionExtractor(Settings(openai_api_key=""))
+
+    mentions = extractor.extract(text="$SMCI rallies on AI server demand.")
+
+    assert {mention.ticker for mention in mentions} == {None}
 
 
 def test_theme_extraction_uses_configured_theme_map() -> None:

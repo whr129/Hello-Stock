@@ -261,17 +261,16 @@ class SchedulerNodes:
         )
         async with self.session_factory() as session:
             source_repo = SourceRepository(session)
+            default_sources = _default_sources_from_settings(self.settings)
+            if default_sources:
+                logger.info(
+                    "scheduler ensuring configured default sources",
+                    extra={"source_count": len(default_sources)},
+                )
+                await source_repo.ensure_default_sources(default_sources)
+                await session.commit()
             sources = await source_repo.list_all_enabled()
             enabled_source_count = len(sources)
-            if not sources:
-                default_sources = _default_sources_from_settings(self.settings)
-                if default_sources:
-                    logger.info(
-                        "scheduler creating configured default sources",
-                        extra={"source_count": len(default_sources)},
-                    )
-                    sources = await source_repo.ensure_default_sources(default_sources)
-                    enabled_source_count = len(sources)
             if pipeline_scope == "market_prices":
                 sources = []
             elif pipeline_scope in {"breaking_resources", "daily_resources"}:

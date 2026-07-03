@@ -31,6 +31,7 @@ This is the current product surface for the Telegram assistant. The bot is a mar
 - `storage/` keeps market entities, mentions, signal snapshots, theme memories, source/article/summary/embedding data, runtime records, jobs, and memories.
 - Refresh observability, reporting, and retry behavior are described in [Refresh Observability and Retry Refactor](refresh-observability-refactor.md).
 - Research answer grounding and source-link rules are described in [Evidence Grounding](evidence-grounding.md).
+- The planned measured improvement loop is described in [Self-Improving Research Plan](self-improving-research-plan.md).
 
 ## Ingestion Sources
 
@@ -61,3 +62,4 @@ Do not use the official X API for the current free/low-cost path. Official X API
 ## Evaluation
 
 Use [Market Research Evaluation](evaluation.md) when judging answer quality or improving research usefulness.
+Use [Self-Improving Research Plan](self-improving-research-plan.md) when changing the research loop, evidence gates, or report depth.

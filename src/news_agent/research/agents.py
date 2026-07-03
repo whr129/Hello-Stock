@@ -4,7 +4,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from news_agent.app.state import AgentResult, SupervisorState
 from news_agent.observability.runtime import RuntimeTraceService
-from news_agent.research.analysis import explain_candidates
+from news_agent.research.analysis import explain_candidates, visible_candidate_explanations
+from news_agent.research.link_validation import validate_candidate_links
 from news_agent.research.planner import PlannerAgent
 from news_agent.research.reporting import format_candidates, format_research_status, format_signal
 from news_agent.research.scheduler import (
@@ -149,14 +150,23 @@ class ResearchSubagent:
             if plan.task_type == "stock_lookup":
                 ticker = plan.entities.tickers[0] if plan.entities.tickers else ""
                 snapshots = await repository.fetch_signal_history(ticker, limit=10)
-                response = format_signal(explain_candidates(snapshots, ticker=ticker), ticker)
+                explanations = await validate_candidate_links(
+                    explain_candidates(snapshots, ticker=ticker)
+                )
+                response = format_signal(explanations, ticker)
             else:
                 snapshots = await repository.fetch_top_candidates(
                     window="24h",
-                    limit=plan.constraints.max_candidates,
+                    limit=max(plan.constraints.max_candidates * 3, plan.constraints.max_candidates),
                     since=since,
                 )
-                response = format_candidates(explain_candidates(snapshots))
+                explanations = await validate_candidate_links(explain_candidates(snapshots))
+                response = format_candidates(
+                    visible_candidate_explanations(
+                        explanations,
+                        limit=plan.constraints.max_candidates,
+                    )
+                )
             await self._finish_iteration_step(
                 retrieval_step_id,
                 {"snapshot_count": len(snapshots), "context_compaction": "deterministic_top_n"},
