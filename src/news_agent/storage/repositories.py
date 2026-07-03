@@ -353,8 +353,14 @@ class ArticleRepository:
         return list(result.scalars())
 
     async def delete_created_before(self, cutoff: datetime) -> int:
+        summarized = select(Summary.article_id).where(Summary.article_id.is_not(None))
+        mentioned = select(MarketMention.article_id).where(MarketMention.article_id.is_not(None))
         result = await self.session.execute(
-            delete(Article).where(Article.created_at < cutoff).returning(Article.id)
+            delete(Article)
+            .where(Article.created_at < cutoff)
+            .where(Article.id.not_in(summarized))
+            .where(Article.id.not_in(mentioned))
+            .returning(Article.id)
         )
         await self.session.flush()
         rows = result.scalars().all()
@@ -774,8 +780,12 @@ class SummaryRepository:
         return summary
 
     async def delete_created_before(self, cutoff: datetime) -> int:
+        mentioned = select(MarketMention.summary_id).where(MarketMention.summary_id.is_not(None))
         result = await self.session.execute(
-            delete(Summary).where(Summary.created_at < cutoff).returning(Summary.id)
+            delete(Summary)
+            .where(Summary.created_at < cutoff)
+            .where(Summary.id.not_in(mentioned))
+            .returning(Summary.id)
         )
         await self.session.flush()
         rows = result.scalars().all()

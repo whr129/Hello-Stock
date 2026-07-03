@@ -81,7 +81,8 @@ Required `.env` values:
 
 ```bash
 TELEGRAM_BOT_TOKEN=
-DATABASE_URL=postgresql+asyncpg://news_agent:news_agent@localhost:5432/news_agent
+DATABASE_URL=postgresql+asyncpg://news_agent:news_agent@localhost:5433/news_agent
+POSTGRES_HOST_PORT=5433
 OPENAI_API_KEY=
 ```
 

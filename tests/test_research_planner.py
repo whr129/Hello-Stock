@@ -10,6 +10,7 @@ def test_research_command_produces_deep_research_plan() -> None:
 
     assert plan.task_type == "deep_research"
     assert plan.research_horizon == "30d"
+    assert plan.constraints.max_candidates == 3
     assert "analysis" in plan.agents_to_run
     assert "macro" in plan.agents_to_run
     assert "filings" in plan.agents_to_run
@@ -23,7 +24,7 @@ def test_candidates_command_produces_candidate_ranking_plan() -> None:
     )
 
     assert plan.task_type == "candidate_ranking"
-    assert plan.constraints.max_candidates == 5
+    assert plan.constraints.max_candidates == 3
 
 
 def test_signals_command_extracts_ticker() -> None:

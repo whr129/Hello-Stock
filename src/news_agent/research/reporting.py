@@ -13,18 +13,30 @@ def format_candidates(explanations: list[CandidateExplanation]) -> str:
     if not explanations:
         return f"No market attention candidates are available yet.\n\n{GUARDRAIL_TEXT}"
 
-    lines = ["Market attention candidates"]
+    lines = ["Market research candidates"]
     for item in explanations:
         label = item.ticker or item.theme or "Theme"
         theme = f" - {item.theme}" if item.theme and item.ticker else ""
-        lines.append(f"{item.rank}. {label}{theme} - score {item.total_score:.0f}")
-        lines.append(f"   Components: {_component_text(item.components)}")
+        lines.append(
+            f"{item.rank}. {label}{theme} - score {item.total_score:.0f} "
+            f"- {item.evidence_strength} evidence"
+        )
+        lines.append(f"   Why this ranked: {_ranking_reason(item)}")
         if item.evidence:
+            lines.append("   Evidence chain:")
             lines.extend(f"   {line}" for line in _evidence_lines(item.evidence, limit=3))
         else:
-            lines.append("   Evidence: not enough stored evidence yet.")
+            lines.append("   Evidence chain: not enough stored evidence yet.")
+        lines.append(f"   Score drivers: {_component_text(item.components)}")
+        lines.append(
+            "   Source quality: "
+            f"{item.distinct_source_count} distinct sources, "
+            f"{item.linked_source_count} link-backed, "
+            f"max trust {item.max_trust_score:.2f}."
+        )
         if item.weak_evidence:
-            lines.append(f"   Weakness: {item.weak_evidence[0]}.")
+            lines.append(f"   Weaknesses: {'; '.join(item.weak_evidence[:3])}.")
+        lines.append(f"   Next checks: {_next_checks(item)}")
     lines.append("")
     lines.append(GUARDRAIL_TEXT)
     return "\n".join(lines)
@@ -43,15 +55,24 @@ def format_signal(explanations: list[CandidateExplanation], ticker: str) -> str:
         f"Current rank: {item.rank or 'unranked'}",
         f"Score: {item.total_score:.0f}",
         f"Theme: {item.theme or 'none detected'}",
-        f"Components: {_component_text(item.components)}",
+        f"Evidence strength: {item.evidence_strength}",
+        f"Why this ranked: {_ranking_reason(item)}",
+        f"Score drivers: {_component_text(item.components)}",
+        (
+            "Source quality: "
+            f"{item.distinct_source_count} distinct sources, "
+            f"{item.linked_source_count} link-backed, "
+            f"max trust {item.max_trust_score:.2f}."
+        ),
     ]
     if item.evidence:
-        lines.append("Evidence:")
+        lines.append("Evidence chain:")
         lines.extend(_evidence_lines(item.evidence, limit=3))
     else:
-        lines.append("Evidence: not enough stored evidence yet.")
+        lines.append("Evidence chain: not enough stored evidence yet.")
     if item.weak_evidence:
         lines.append("Weak or missing evidence: " + "; ".join(item.weak_evidence) + ".")
+    lines.append(f"Next checks: {_next_checks(item)}")
     lines.append("")
     lines.append(GUARDRAIL_TEXT)
     return "\n".join(lines)
@@ -100,26 +121,80 @@ def _evidence_lines(evidence: list[dict[str, object]], *, limit: int) -> list[st
     for item in evidence[:limit]:
         title = _clean(item.get("article_title"))
         url = _clean(item.get("article_url"))
+        url_status = _clean(item.get("article_url_status"))
         source = _clean(item.get("source_name")) or _clean(item.get("source_family"))
         when = _display_date(item.get("published_at") or item.get("created_at"))
         snippet = _clean(item.get("evidence_text")) or _clean(item.get("text"))
 
-        if title and url:
+        if title and url and url_status == "available":
             label = title
             if source:
                 label += f" - {source}"
             if when:
                 label += f", {when}"
-            lines.append(f"Evidence: {label}: {url}")
+            lines.append(f"- {label}: {url}")
+            lines.append(f"  Why it matters: {_evidence_reason(item, snippet)}")
+        elif title and url and url_status == "unavailable":
+            label = title
+            if source:
+                label += f" - {source}"
+            lines.append(f"- {label}: link unavailable after validation.")
+        elif title and url:
+            label = title
+            if source:
+                label += f" - {source}"
+            lines.append(f"- {label}: link not checked yet.")
         elif snippet:
-            lines.append(f"Evidence: stored evidence, link unavailable: {snippet}")
+            lines.append(f"- Stored evidence, link unavailable: {snippet}")
         else:
-            lines.append("Evidence: stored evidence, link unavailable.")
+            lines.append("- Stored evidence, link unavailable.")
 
-        if snippet and title and url:
+        if snippet and title and url_status == "available":
             lines.append(f"  {snippet[:220]}")
 
-    return lines or ["Evidence: not enough stored evidence yet."]
+    return lines or ["- Not enough stored evidence yet."]
+
+
+def _ranking_reason(item: CandidateExplanation) -> str:
+    theme = item.theme or "the detected market theme"
+    label = item.ticker or theme
+    if item.evidence_strength == "strong":
+        return (
+            f"{label} has either multiple linked sources or one high-trust direct source "
+            f"supporting {theme}."
+        )
+    if item.evidence_strength == "developing":
+        return (
+            f"{label} has link-backed evidence, but source breadth or confirmation "
+            "is still limited."
+        )
+    return f"{label} is present in stored signals, but the evidence gate is still weak."
+
+
+def _evidence_reason(item: dict[str, object], snippet: str) -> str:
+    source_family = _clean(item.get("source_family")) or "source"
+    trust_score = _clean(item.get("trust_score"))
+    reason = f"This {source_family} item is the stored source behind the candidate thesis"
+    if trust_score:
+        reason += f" and carries trust {trust_score}"
+    if snippet:
+        reason += "; the snippet states the concrete catalyst."
+    else:
+        reason += "."
+    return reason
+
+
+def _next_checks(item: CandidateExplanation) -> str:
+    checks = []
+    if item.linked_source_count < 2 and item.max_trust_score < 0.95:
+        checks.append("find a second independent link-backed source")
+    if item.components.get("price_momentum") == 50.0:
+        checks.append("confirm price follow-through")
+    if item.components.get("volume_signal") == 50.0:
+        checks.append("confirm volume follow-through")
+    if not checks:
+        checks.append("watch for follow-through in filings, earnings commentary, and market data")
+    return "; ".join(checks)
 
 
 def _clean(value: object) -> str:

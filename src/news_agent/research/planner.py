@@ -56,7 +56,7 @@ class PlannerAgent:
                     "report",
                 ],
                 output_format="telegram_summary",
-                constraints=ResearchConstraints(max_candidates=5, include_weak_evidence=True),
+                constraints=ResearchConstraints(max_candidates=3, include_weak_evidence=True),
                 command=command,
                 query=message_text,
             )
@@ -67,7 +67,7 @@ class PlannerAgent:
                 research_horizon="7d",
                 agents_to_run=["analysis", "report"],
                 output_format="telegram_summary",
-                constraints=ResearchConstraints(max_candidates=5),
+                constraints=ResearchConstraints(max_candidates=3),
                 command=command,
                 query=message_text,
             )
@@ -77,7 +77,7 @@ class PlannerAgent:
             research_horizon="30d",
             agents_to_run=["analysis", "report"],
             output_format="telegram_summary",
-            constraints=ResearchConstraints(max_candidates=5, include_weak_evidence=True),
+            constraints=ResearchConstraints(max_candidates=3, include_weak_evidence=True),
             command=command or "/candidates",
             query=message_text,
         )

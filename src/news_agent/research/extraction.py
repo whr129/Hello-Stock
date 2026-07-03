@@ -40,6 +40,9 @@ class MentionExtractor:
         self.non_entity_terms = _csv_set(
             settings.market_research_non_entity_terms if settings else ""
         )
+        self.market_universe_tickers = _csv_set(
+            settings.market_universe_symbols if settings else ""
+        )
         self.client = (
             AsyncOpenAI(api_key=settings.openai_api_key)
             if settings and settings.llm_mention_extraction_enabled and settings.openai_api_key
@@ -92,7 +95,13 @@ class MentionExtractor:
         clean_text = " ".join(text.split())
         extracted = [
             *self._extract_tickers(clean_text),
-            *(_normalize_related_ticker(ticker) for ticker in related_tickers),
+            *(
+                ticker
+                for ticker in (
+                    _normalize_related_ticker(ticker) for ticker in related_tickers
+                )
+                if ticker and self._related_ticker_allowed(ticker)
+            ),
         ]
         tickers = sorted(
             dict.fromkeys(
@@ -155,23 +164,46 @@ class MentionExtractor:
             ]
         return mentions
 
+    def _related_ticker_allowed(self, ticker: str) -> bool:
+        if ticker in self.blocked_tickers:
+            return False
+        if self.market_universe_tickers:
+            return ticker in self.market_universe_tickers
+        return True
+
     def _extract_tickers(self, text: str) -> list[str]:
         cashtags = [
             match.group(1).upper()
             for match in CASHTAG_PATTERN.finditer(text)
-            if self._looks_like_ticker(match.group(1), allow_one_letter=True)
+            if self._looks_like_ticker(
+                match.group(1),
+                allow_one_letter=True,
+                require_universe=bool(self.market_universe_tickers),
+            )
         ]
         bare = [
             match.group(1).upper()
             for match in BARE_UPPERCASE_TICKER_PATTERN.finditer(text)
-            if self._looks_like_ticker(match.group(1), allow_one_letter=False)
+            if self._looks_like_ticker(
+                match.group(1),
+                allow_one_letter=False,
+                require_universe=True,
+            )
         ]
         return sorted(dict.fromkeys([*cashtags, *bare]))
 
-    def _looks_like_ticker(self, value: str, *, allow_one_letter: bool) -> bool:
+    def _looks_like_ticker(
+        self,
+        value: str,
+        *,
+        allow_one_letter: bool,
+        require_universe: bool,
+    ) -> bool:
         normalized = value.upper()
         if normalized in self.blocked_tickers:
             return False
+        if require_universe and self.market_universe_tickers:
+            return normalized in self.market_universe_tickers
         if (
             len(normalized) == 1
             and not allow_one_letter

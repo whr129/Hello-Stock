@@ -26,6 +26,7 @@ Return strict JSON:
     "evidence_quality": 1-5,
     "freshness": 1-5,
     "source_attribution": 1-5,
+    "source_link_validity": 1-5,
     "usefulness": 1-5,
     "safety": 1-5,
     "concision": 1-5
@@ -33,7 +34,8 @@ Return strict JSON:
   "pass": true|false,
   "tags": [
     "too_generic|no_evidence|wrong_ticker|stale_data|hallucinated_source",
-    "unclear_ranking_reason|too_verbose|missing_weak_evidence|not_useful_research"
+    "unclear_ranking_reason|too_verbose|missing_weak_evidence|not_useful_research",
+    "missing_links|broken_link|thin_evidence|too_many_candidates"
   ],
   "notes": "short reason"
 }
@@ -125,6 +127,12 @@ def _deterministic_judgment(case: EvalCase, answer: str) -> dict[str, Any]:
         tags.append("missing_safety")
     if "evidence" in case.expected.lower() and "evidence" not in lowered:
         tags.append("no_evidence")
+    if "working link" in case.expected.lower() and "link unavailable" in lowered:
+        tags.append("broken_link")
+    if "multiple sources" in case.expected.lower() and "1 distinct sources" in lowered:
+        tags.append("thin_evidence")
+    if _candidate_count(answer) > 3:
+        tags.append("too_many_candidates")
     if any(fake in answer.split() for fake in ("A", "V", "THIS")):
         tags.append("wrong_ticker")
     passed = not tags
@@ -137,6 +145,7 @@ def _deterministic_judgment(case: EvalCase, answer: str) -> dict[str, Any]:
             "evidence_quality": score,
             "freshness": 3,
             "source_attribution": score,
+            "source_link_validity": 5 if "broken_link" not in tags else 2,
             "usefulness": score,
             "safety": 5 if "missing_safety" not in tags else 2,
             "concision": 4,
@@ -166,14 +175,22 @@ def _load_cases(path: Path, limit: int) -> list[EvalCase]:
     return cases
 
 
+def _candidate_count(answer: str) -> int:
+    prefixes = {"1. ", "2. ", "3. ", "4. ", "5. "}
+    return sum(1 for line in answer.splitlines() if line[:3] in prefixes)
+
+
 def _markdown_report(results: list[dict[str, Any]]) -> str:
     passed = sum(1 for result in results if result["judgment"].get("pass"))
+    tag_counts = _tag_counts(results)
+    next_target = _next_improvement_target(tag_counts)
     lines = [
         "# Market Research Evaluation Report",
         "",
         f"- Cases: {len(results)}",
         f"- Passed: {passed}",
         f"- Failed: {len(results) - passed}",
+        f"- Next improvement target: {next_target}",
         "",
         "## Cases",
     ]
@@ -190,6 +207,31 @@ def _markdown_report(results: list[dict[str, Any]]) -> str:
             ]
         )
     return "\n".join(lines) + "\n"
+
+
+def _tag_counts(results: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for result in results:
+        for tag in result["judgment"].get("tags", []):
+            counts[tag] = counts.get(tag, 0) + 1
+    return counts
+
+
+def _next_improvement_target(tag_counts: dict[str, int]) -> str:
+    if not tag_counts:
+        return "none"
+    tag = max(tag_counts, key=lambda item: (tag_counts[item], item))
+    targets = {
+        "broken_link": "retrieval/evidence validation",
+        "missing_links": "retrieval/evidence enrichment",
+        "thin_evidence": "source expansion or candidate filtering",
+        "too_many_candidates": "planner/report limits",
+        "unclear_ranking_reason": "report explanation text",
+        "wrong_ticker": "ticker extraction",
+        "stale_data": "source freshness",
+        "no_evidence": "evidence ingestion and backfill",
+    }
+    return f"{tag} -> {targets.get(tag, 'research answer quality')}"
 
 
 def main() -> None:
