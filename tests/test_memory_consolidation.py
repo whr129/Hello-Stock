@@ -87,6 +87,32 @@ async def test_extract_turn_candidates_uses_llm_schema() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "memory_text",
+    [
+        "User lives in Toronto.",
+        "User's API key is secret-value.",
+        "User wants a technology watchlist.",
+    ],
+)
+async def test_extract_turn_candidates_rejects_removed_or_sensitive_memory(
+    memory_text: str,
+) -> None:
+    service = _service()
+    service.client = FakeClient(
+        {
+            "candidates": [
+                {"text": memory_text, "category": "profile", "confidence": 0.95}
+            ]
+        }
+    )
+
+    candidates = await service.extract_turn_candidates(user_message=memory_text)
+
+    assert candidates == []
+
+
+@pytest.mark.asyncio
 async def test_consolidate_candidate_fallback_updates_close_match() -> None:
     service = _service()
     nearest = [
@@ -134,6 +160,56 @@ async def test_consolidate_candidate_normalizes_llm_action() -> None:
 
     assert decision.action == "skip"
     assert decision.memory_id is None
+
+
+@pytest.mark.asyncio
+async def test_consolidate_candidate_rejects_memory_id_outside_supplied_pool() -> None:
+    service = _service()
+    service.client = FakeClient(
+        {
+            "action": "update",
+            "memory_id": 99,
+            "text": "User prefers concise English replies.",
+            "category": "preference",
+            "confidence": 0.9,
+        }
+    )
+    nearest = [
+        (
+            LongTermMemory(
+                id=7,
+                user_id=1,
+                memory_type="learned",
+                memory_text="User prefers English replies.",
+                category="preference",
+                status="active",
+                source="memory_job",
+                confidence=0.7,
+            ),
+            0.1,
+        )
+    ]
+
+    decision = await service.consolidate_candidate(
+        MemoryCandidate(
+            text="User prefers concise English replies.",
+            category="preference",
+            confidence=0.9,
+        ),
+        nearest,
+    )
+
+    assert decision.action == "skip"
+    assert decision.memory_id is None
+
+
+def test_memory_prompts_exclude_removed_personalization_and_treat_data_as_untrusted() -> None:
+    from news_agent.memory.consolidation import EXTRACTION_PROMPT, TURN_EXTRACTION_PROMPT
+
+    combined = f"{EXTRACTION_PROMPT}\n{TURN_EXTRACTION_PROMPT}"
+    assert "local-news preferences" not in combined
+    assert "watch_habit" not in combined
+    assert "untrusted data" in combined
 
 
 @pytest.mark.asyncio

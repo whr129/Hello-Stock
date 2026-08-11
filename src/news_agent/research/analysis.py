@@ -11,6 +11,7 @@ def explain_candidates(
     snapshots: list[MarketSignalSnapshot],
     *,
     ticker: str | None = None,
+    min_strong_sources: int = 2,
 ) -> list[CandidateExplanation]:
     filtered = snapshots
     if ticker:
@@ -21,7 +22,7 @@ def explain_candidates(
         components = dict(snapshot.component_scores or {})
         evidence = list(snapshot.evidence or [])
         profile = _evidence_profile(evidence)
-        strength = _evidence_strength(snapshot, profile)
+        strength = _evidence_strength(snapshot, profile, min_strong_sources=min_strong_sources)
         explanations.append(
             CandidateExplanation(
                 ticker=snapshot.ticker,
@@ -32,6 +33,7 @@ def explain_candidates(
                 evidence=evidence,
                 weak_evidence=_weak_evidence(snapshot, evidence),
                 created_at=snapshot.created_at,
+                snapshot_id=snapshot.id,
                 evidence_strength=strength,
                 distinct_source_count=profile["distinct_source_count"],
                 linked_source_count=profile["linked_source_count"],
@@ -46,12 +48,16 @@ def visible_candidate_explanations(
     explanations: list[CandidateExplanation],
     *,
     limit: int,
+    include_developing: bool = False,
 ) -> list[CandidateExplanation]:
     visible = []
     seen: set[tuple[str | None, str | None]] = set()
     for item in explanations:
         key = (item.ticker, item.theme)
-        if item.evidence_strength == "strong" and key not in seen:
+        allowed = item.evidence_strength == "strong" or (
+            include_developing and item.evidence_strength == "developing"
+        )
+        if allowed and key not in seen:
             visible.append(item)
             seen.add(key)
     return [replace(item, rank=index) for index, item in enumerate(visible[:limit], start=1)]
@@ -100,10 +106,16 @@ def _evidence_profile(evidence: list[dict[str, object]]) -> dict[str, object]:
         for item in evidence
         if isinstance(item.get("article_url"), str) and item.get("article_url")
     }
+    clusters = {
+        item.get("evidence_cluster_id") or item.get("article_url")
+        for item in evidence
+        if item.get("evidence_cluster_id") or item.get("article_url")
+    }
     trust_scores = [_trust_score(item) for item in evidence]
     return {
         "distinct_source_count": len(named_sources),
         "linked_source_count": len(linked_sources),
+        "distinct_cluster_count": len(clusters),
         "max_trust_score": max(trust_scores, default=0.0),
         "has_direct_high_impact": any(_is_direct_high_impact(item) for item in evidence),
     }
@@ -112,12 +124,19 @@ def _evidence_profile(evidence: list[dict[str, object]]) -> dict[str, object]:
 def _evidence_strength(
     snapshot: MarketSignalSnapshot,
     profile: dict[str, object],
+    *,
+    min_strong_sources: int,
 ) -> EvidenceStrength:
     distinct_source_count = int(profile["distinct_source_count"])
     linked_source_count = int(profile["linked_source_count"])
+    distinct_cluster_count = int(profile["distinct_cluster_count"])
     max_trust_score = float(profile["max_trust_score"])
     has_direct_high_impact = bool(profile["has_direct_high_impact"])
-    if distinct_source_count >= 2 and linked_source_count >= 2:
+    if (
+        distinct_source_count >= min_strong_sources
+        and linked_source_count >= min_strong_sources
+        and distinct_cluster_count >= min_strong_sources
+    ):
         return "strong"
     if max_trust_score >= HIGH_TRUST_DIRECT_SOURCE_THRESHOLD and has_direct_high_impact:
         return "strong"
@@ -137,6 +156,8 @@ def _suppression_reasons(
         reasons.append("no verified link-backed evidence candidate")
     if int(profile["distinct_source_count"]) < 2:
         reasons.append("not enough distinct sources for a strong candidate")
+    if int(profile.get("distinct_cluster_count", 0)) < 2:
+        reasons.append("not enough distinct evidence clusters for a strong candidate")
     if float(profile["max_trust_score"]) < HIGH_TRUST_DIRECT_SOURCE_THRESHOLD:
         reasons.append("no high-trust direct source")
     return reasons

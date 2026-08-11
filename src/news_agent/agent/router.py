@@ -26,6 +26,7 @@ COMMAND_INTENTS: dict[str, Intent] = {
     "/candidates": "candidates",
     "/signals": "signals",
     "/researchstatus": "researchstatus",
+    "/sourcehealth": "sourcehealth",
     "/skills": "skills",
     "/help": "help",
     "/start": "help",
@@ -56,7 +57,7 @@ def skills_response() -> str:
     return (
         "Commands:\n"
         "\n"
-        "Research: /research, /candidates, /signals <ticker>, /researchstatus\n"
+        "Research: /research, /candidates, /signals <ticker>, /researchstatus, /sourcehealth\n"
         "\n"
         "Sources: /sources, /addsource <provider> <target>, /sourceconfig <id> <key> <value>, "
         "/sourcefields <id> <field> <value>, /sourcetest <id>, /removesource <id>\n"
@@ -109,7 +110,7 @@ def route_request(
         return RouteDecision(agents=("runtime",), capabilities=("runtime_inspection",))
     if intent == "alerts":
         return RouteDecision(agents=("runtime",), capabilities=("runtime_alerts",))
-    if intent in {"research", "candidates", "signals", "researchstatus"}:
+    if intent in {"research", "candidates", "signals", "researchstatus", "sourcehealth"}:
         return RouteDecision(agents=("research",), capabilities=("market_research",))
     if intent == "skills":
         return RouteDecision(agents=("news",), capabilities=("skills",))

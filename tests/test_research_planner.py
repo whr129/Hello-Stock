@@ -38,6 +38,17 @@ def test_signals_command_extracts_ticker() -> None:
     assert plan.entities.tickers == ["MU"]
 
 
+def test_sourcehealth_command_produces_source_health_plan() -> None:
+    plan = PlannerAgent().plan(
+        command="/sourcehealth",
+        args=[],
+        message_text="/sourcehealth",
+    )
+
+    assert plan.task_type == "source_health"
+    assert plan.constraints.max_candidates == 3
+
+
 def test_research_command_extracts_sector_terms_without_ai_as_ticker() -> None:
     plan = PlannerAgent().plan(
         command="/research",

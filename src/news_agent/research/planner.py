@@ -18,6 +18,7 @@ class PlannerAgent:
     """Deterministic first-pass planner for market research flows."""
 
     def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings
         self.sector_keywords = sector_keywords_from_settings(settings)
 
     def plan(
@@ -37,7 +38,11 @@ class PlannerAgent:
                 research_horizon="30d",
                 agents_to_run=["news", "market", "memory", "analysis", "report"],
                 output_format="telegram_summary",
-                constraints=ResearchConstraints(max_candidates=1, include_weak_evidence=True),
+                constraints=ResearchConstraints(
+                    max_candidates=1,
+                    include_weak_evidence=True,
+                    include_developing_evidence=True,
+                ),
                 command=command,
                 query=message_text,
             )
@@ -56,7 +61,13 @@ class PlannerAgent:
                     "report",
                 ],
                 output_format="telegram_summary",
-                constraints=ResearchConstraints(max_candidates=3, include_weak_evidence=True),
+                constraints=ResearchConstraints(
+                    max_candidates=3,
+                    include_weak_evidence=True,
+                    include_developing_evidence=(
+                        self.settings.signal_allow_developing_default if self.settings else False
+                    ),
+                ),
                 command=command,
                 query=message_text,
             )
@@ -71,13 +82,30 @@ class PlannerAgent:
                 command=command,
                 query=message_text,
             )
+        if command == "/sourcehealth":
+            return ResearchPlan(
+                task_type="source_health",
+                entities=ResearchEntities(),
+                research_horizon="7d",
+                agents_to_run=["analysis", "report"],
+                output_format="telegram_summary",
+                constraints=ResearchConstraints(max_candidates=3),
+                command=command,
+                query=message_text,
+            )
         return ResearchPlan(
             task_type="candidate_ranking",
             entities=entities,
             research_horizon="30d",
             agents_to_run=["analysis", "report"],
             output_format="telegram_summary",
-            constraints=ResearchConstraints(max_candidates=3, include_weak_evidence=True),
+            constraints=ResearchConstraints(
+                max_candidates=3,
+                include_weak_evidence=True,
+                include_developing_evidence=(
+                    self.settings.signal_allow_developing_default if self.settings else False
+                ),
+            ),
             command=command or "/candidates",
             query=message_text,
         )

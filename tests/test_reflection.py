@@ -42,6 +42,20 @@ def test_reflection_payload_normalizes_retry_args() -> None:
     )
 
 
+def test_reflection_supports_source_health_correction() -> None:
+    decision = _decision_from_payload(
+        {
+            "verdict": "retry",
+            "reason": "source health request used general search",
+            "corrected_intent": "sourcehealth",
+            "corrected_args": [],
+        }
+    )
+
+    assert decision.verdict == "retry"
+    assert decision.corrected_intent == "sourcehealth"
+
+
 @pytest.mark.asyncio
 async def test_reflection_service_without_client_passes_unavailable() -> None:
     service = ReflectionService(Settings(openai_api_key=""))

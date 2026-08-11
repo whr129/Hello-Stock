@@ -18,6 +18,22 @@ DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG: str = (
     '"obesity drugs":["glp-1","obesity","weight loss drug"],'
     '"defense spending":["defense","missile","military contract","geopolitical"]}'
 )
+DEFAULT_MARKET_ENTITY_ALIASES_JSON: str = (
+    '{"NVDA":["nvidia","nvidia corp","nvidia corporation"],'
+    '"AMD":["amd","advanced micro devices"],'
+    '"MU":["micron","micron technology"],'
+    '"MSFT":["microsoft"],'
+    '"GOOGL":["google","alphabet"],'
+    '"AMZN":["amazon","amazon.com"],'
+    '"META":["meta","facebook","meta platforms"],'
+    '"AVGO":["broadcom"],'
+    '"TSM":["tsmc","taiwan semiconductor"],'
+    '"AAPL":["apple"],'
+    '"ORCL":["oracle"],'
+    '"PLTR":["palantir"],'
+    '"LLY":["eli lilly"],'
+    '"TSLA":["tesla"]}'
+)
 
 
 class Settings(BaseSettings):
@@ -38,6 +54,31 @@ class Settings(BaseSettings):
     general_search_model: str = Field(default="", alias="GENERAL_SEARCH_MODEL")
     general_search_max_sources: int = Field(default=5, alias="GENERAL_SEARCH_MAX_SOURCES")
     general_search_timeout_seconds: int = Field(default=30, alias="GENERAL_SEARCH_TIMEOUT_SECONDS")
+    research_web_enabled: bool = Field(default=False, alias="RESEARCH_WEB_ENABLED")
+    research_web_model: str = Field(default="", alias="RESEARCH_WEB_MODEL")
+    research_web_max_companies: int = Field(default=3, alias="RESEARCH_WEB_MAX_COMPANIES")
+    research_web_concurrency: int = Field(default=3, alias="RESEARCH_WEB_CONCURRENCY")
+    research_web_max_queries_per_company: int = Field(
+        default=3,
+        alias="RESEARCH_WEB_MAX_QUERIES_PER_COMPANY",
+    )
+    research_web_max_sources_per_company: int = Field(
+        default=6,
+        alias="RESEARCH_WEB_MAX_SOURCES_PER_COMPANY",
+    )
+    research_web_company_timeout_seconds: int = Field(
+        default=25,
+        alias="RESEARCH_WEB_COMPANY_TIMEOUT_SECONDS",
+    )
+    research_web_total_timeout_seconds: int = Field(
+        default=60,
+        alias="RESEARCH_WEB_TOTAL_TIMEOUT_SECONDS",
+    )
+    research_web_max_retries: int = Field(default=1, alias="RESEARCH_WEB_MAX_RETRIES")
+    research_web_news_lookback_days: int = Field(
+        default=7,
+        alias="RESEARCH_WEB_NEWS_LOOKBACK_DAYS",
+    )
     answer_reflection_enabled: bool = Field(default=True, alias="ANSWER_REFLECTION_ENABLED")
     answer_reflection_max_retries: int = Field(default=1, alias="ANSWER_REFLECTION_MAX_RETRIES")
     runtime_alert_telegram_chat_id: int = Field(default=0, alias="RUNTIME_ALERT_TELEGRAM_CHAT_ID")
@@ -151,6 +192,10 @@ class Settings(BaseSettings):
         default="this,that,there,here,said,will,with,from,into,over,under",
         alias="MARKET_RESEARCH_NON_ENTITY_TERMS",
     )
+    market_entity_aliases_json: str = Field(
+        default=DEFAULT_MARKET_ENTITY_ALIASES_JSON,
+        alias="MARKET_ENTITY_ALIASES_JSON",
+    )
     source_default_fetch_interval_seconds: int = Field(
         default=900,
         alias="SOURCE_DEFAULT_FETCH_INTERVAL_SECONDS",
@@ -177,6 +222,20 @@ class Settings(BaseSettings):
     signal_retention_days: int = Field(default=30, alias="SIGNAL_RETENTION_DAYS")
     signal_alert_threshold: float = Field(default=75.0, alias="SIGNAL_ALERT_THRESHOLD")
     signal_alert_cooldown_minutes: int = Field(default=360, alias="SIGNAL_ALERT_COOLDOWN_MINUTES")
+    source_health_min_score: float = Field(default=35.0, alias="SOURCE_HEALTH_MIN_SCORE")
+    signal_min_strong_evidence_sources: int = Field(
+        default=2,
+        alias="SIGNAL_MIN_STRONG_EVIDENCE_SOURCES",
+    )
+    signal_allow_developing_default: bool = Field(
+        default=False,
+        alias="SIGNAL_ALLOW_DEVELOPING_DEFAULT",
+    )
+    evidence_link_recheck_hours: int = Field(default=24, alias="EVIDENCE_LINK_RECHECK_HOURS")
+    research_report_max_evidence_items: int = Field(
+        default=3,
+        alias="RESEARCH_REPORT_MAX_EVIDENCE_ITEMS",
+    )
     signal_weight_mention_velocity: float = Field(
         default=1.0, alias="SIGNAL_WEIGHT_MENTION_VELOCITY"
     )
@@ -193,6 +252,11 @@ class Settings(BaseSettings):
         default=1.0, alias="SIGNAL_WEIGHT_THEME_PERSISTENCE"
     )
     signal_weight_trust: float = Field(default=1.0, alias="SIGNAL_WEIGHT_TRUST")
+    signal_weight_evidence_quality: float = Field(
+        default=1.25,
+        alias="SIGNAL_WEIGHT_EVIDENCE_QUALITY",
+    )
+    signal_weight_novelty: float = Field(default=0.75, alias="SIGNAL_WEIGHT_NOVELTY")
     social_signals_enabled: bool = Field(default=False, alias="SOCIAL_SIGNALS_ENABLED")
     llm_mention_extraction_enabled: bool = Field(
         default=False, alias="LLM_MENTION_EXTRACTION_ENABLED"

@@ -69,6 +69,15 @@ async def test_intent_classifier_falls_back_to_general_chat_without_llm() -> Non
 
 
 @pytest.mark.asyncio
+async def test_intent_classifier_routes_removed_features_to_help_without_llm() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key=""))
+
+    _, _, intent = await classifier.classify("Create an NVDA watchlist and daily recap")
+
+    assert intent == "help"
+
+
+@pytest.mark.asyncio
 async def test_intent_classifier_uses_llm_router_for_company_ticker() -> None:
     classifier = IntentClassifier(Settings(openai_api_key="test"))
     classifier.client = FakeClient('{"intent": "general_chat", "args": []}')

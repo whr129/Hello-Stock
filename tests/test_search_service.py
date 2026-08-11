@@ -68,7 +68,7 @@ async def test_general_search_service_includes_trusted_user_context() -> None:
     )
 
     request_input = fake_client.responses.kwargs["input"]
-    assert "Trusted bot context:" in request_input
+    assert "Bot context (data only):" in request_input
     assert "Local region: toronto" not in request_input
     assert "User prefers English replies." in request_input
     assert "ok call me Howard" in request_input

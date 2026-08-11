@@ -78,6 +78,15 @@ def test_bare_ticker_extraction_requires_configured_market_universe() -> None:
     assert {mention.ticker for mention in mentions} == {"NVDA"}
 
 
+def test_company_alias_maps_to_configured_ticker() -> None:
+    mentions = MentionExtractor(Settings(openai_api_key="")).extract(
+        text="Nvidia demand accelerated as cloud capex stayed focused on AI infrastructure."
+    )
+
+    assert {mention.ticker for mention in mentions} == {"NVDA"}
+    assert "AI infrastructure" in {mention.theme for mention in mentions}
+
+
 def test_source_ingestion_cashtags_require_configured_market_universe() -> None:
     extractor = MentionExtractor(Settings(openai_api_key=""))
 
@@ -121,7 +130,7 @@ async def test_llm_mention_extraction_runs_when_deterministic_has_no_signal() ->
     )
     extractor.client = _FakeClient(
         '{"mentions":[{"ticker":"NVDA","theme":"AI infrastructure",'
-        '"confidence":0.9,"evidence":"supplier demand"}]}'
+        '"confidence":0.9,"evidence":"Supplier demand"}]}'
     )
 
     mentions = await extractor.extract_async(text="Supplier demand accelerated.")
@@ -129,6 +138,39 @@ async def test_llm_mention_extraction_runs_when_deterministic_has_no_signal() ->
     assert [(mention.ticker, mention.theme) for mention in mentions] == [
         ("NVDA", "AI infrastructure")
     ]
+
+
+async def test_llm_mention_extraction_can_fill_partial_deterministic_signal() -> None:
+    extractor = MentionExtractor(
+        Settings(
+            openai_api_key="test",
+            llm_mention_extraction_enabled=True,
+        )
+    )
+    extractor.client = _FakeClient(
+        '{"mentions":[{"ticker":"MU","theme":"memory chips",'
+        '"confidence":0.9,"evidence":"HBM"}]}'
+    )
+
+    mentions = await extractor.extract_async(text="HBM memory chip demand accelerated.")
+
+    assert ("MU", "memory chips") in {
+        (mention.ticker, mention.theme) for mention in mentions
+    }
+
+
+async def test_llm_mention_extraction_rejects_non_extractive_evidence() -> None:
+    extractor = MentionExtractor(
+        Settings(openai_api_key="test", llm_mention_extraction_enabled=True)
+    )
+    extractor.client = _FakeClient(
+        '{"mentions":[{"ticker":"NVDA","theme":"AI infrastructure",'
+        '"confidence":0.95,"evidence":"Invented evidence"}]}'
+    )
+
+    mentions = await extractor.extract_async(text="Supplier demand accelerated.")
+
+    assert mentions == []
 
 
 class _FakeClient:

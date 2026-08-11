@@ -8,6 +8,15 @@ PYTHONPATH=src .venv/bin/news-agent-eval
 
 Set `EVAL_LLM_ENABLED=true` to use the LLM judge. Results are written as JSONL plus a Markdown report under `EVAL_OUTPUT_PATH`.
 
+Reports record whether scoring used the live LLM judge or the deterministic fallback, the
+judge model, and the prompt revision. Deterministic fallback results validate basic answer
+shape only and must not be treated as evidence that model-facing prompts passed live evaluation.
+
+Before releasing prompt changes, run the same versioned 20-30 case suite before and after the
+change with a configured API key. Require at least a 90% pass rate, zero hallucinated-source,
+wrong-ticker, broken-link, or investment-advice failures, and no decline in average relevance,
+grounding, or usefulness. CI continues to run deterministic contract and regression tests.
+
 ## Evaluation Layers
 
 Technical correctness:

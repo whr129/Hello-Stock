@@ -51,6 +51,7 @@ def register_handlers(application: Application) -> None:
         "candidates",
         "signals",
         "researchstatus",
+        "sourcehealth",
         "skills",
     ]
     for command in commands:

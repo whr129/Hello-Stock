@@ -4,7 +4,7 @@ This is the current product surface for the Telegram assistant. The bot is a mar
 
 ## Kept Surfaces
 
-- `/research`, `/candidates`, `/signals <ticker>`, and `/researchstatus`.
+- `/research`, `/candidates`, `/signals <ticker>`, `/researchstatus`, and `/sourcehealth`.
 - `/sources`, `/addsource`, `/sourceconfig`, `/sourcefields`, `/sourcetest`, `/sourcepack`, and `/removesource`.
 - `/refresh [pipeline]` for manual scheduler runs, including `market_prices`, `breaking_resources`, `daily_resources`, and `all`.
 - `/runtime`, `/job`, `/refreshreport`, `/trace`, `/step`, and `/alerts`.
@@ -41,6 +41,8 @@ Pulling is source-configurable. Use `pipeline_tier`, `fetch_interval_seconds`, `
 
 The curated starter pack is checked in at [default-sources.json](default-sources.json) and is enabled by default. It prioritizes official macro, filings, policy, regulatory, energy, commodities, company-specific EDGAR, and market-news feeds. Use `/sourcepack [category]` to list feeds that can be checked or added. Set `DEFAULT_SOURCE_PACK_ENABLED=false` to disable the checked-in pack, or set `DEFAULT_SOURCES_JSON` to override it.
 
+Source quality is measured with freshness, fetch success, accepted market-impact volume, saved article volume, and link availability. Sources below `SOURCE_HEALTH_MIN_SCORE` are skipped unless their config sets `source_health_override=true`. Use `/sourcehealth` to inspect health status and score.
+
 Supported source providers:
 
 - `rss`: requires a feed URL. Useful examples include company IR feeds, SEC press releases, Federal Reserve press releases, and market/news RSS feeds.
@@ -58,6 +60,7 @@ Do not use the official X API for the current free/low-cost path. Official X API
 - Keep scoring weights, retention, alert thresholds, provider behavior, and source choices configuration-driven.
 - Treat transcripts, learned memories, Telegram data, source credentials, and market research data as sensitive.
 - Prefer deterministic behavior for planning, extraction, scoring, and routing. Use LLMs for summarization/explanation where appropriate, with deterministic fallbacks.
+- Keep candidate gates configurable with `SIGNAL_MIN_STRONG_EVIDENCE_SOURCES`, `SIGNAL_ALLOW_DEVELOPING_DEFAULT`, `EVIDENCE_LINK_RECHECK_HOURS`, and `RESEARCH_REPORT_MAX_EVIDENCE_ITEMS`.
 
 ## Evaluation
 
