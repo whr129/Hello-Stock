@@ -29,6 +29,7 @@ from news_agent.research.scheduler import (
     prune_market_research_data,
     score_market_signals,
 )
+from news_agent.research.source_health import score_source_health, source_is_suppressed
 from news_agent.settings import Settings
 from news_agent.storage.models import JobRun, Source
 from news_agent.storage.repositories import (
@@ -279,9 +280,15 @@ class SchedulerNodes:
                     for source in sources
                     if _source_in_pipeline(source, pipeline_scope)
                     and _source_is_due(source, self.settings)
+                    and not _source_health_suppressed(source, self.settings)
                 ]
             else:
-                sources = [source for source in sources if _source_is_due(source, self.settings)]
+                sources = [
+                    source
+                    for source in sources
+                    if _source_is_due(source, self.settings)
+                    and not _source_health_suppressed(source, self.settings)
+                ]
             tickers = (
                 await self._market_universe_symbols(session)
                 if pipeline_scope in {"all", "market_prices"}
@@ -620,6 +627,7 @@ class SchedulerNodes:
         rejected_article_count = 0
         duplicate_article_count = 0
         source_quality: dict[str, dict[str, int]] = {}
+        source_quality_by_id: dict[int, dict[str, int]] = {}
         classification_metadata: list[dict[str, Any]] = []
 
         async with self.session_factory() as session:
@@ -634,7 +642,12 @@ class SchedulerNodes:
                     source_name,
                     {"fetched": 0, "accepted": 0, "rejected": 0, "saved": 0, "duplicates": 0},
                 )
+                quality_by_id = source_quality_by_id.setdefault(
+                    int(item["source_id"]),
+                    {"fetched": 0, "accepted": 0, "rejected": 0, "saved": 0, "duplicates": 0},
+                )
                 quality["fetched"] += 1
+                quality_by_id["fetched"] += 1
                 classification = await self.market_impact_classifier.classify(
                     title=title,
                     text=text,
@@ -652,9 +665,11 @@ class SchedulerNodes:
                 if not classification.accepted:
                     rejected_article_count += 1
                     quality["rejected"] += 1
+                    quality_by_id["rejected"] += 1
                     continue
                 accepted_article_count += 1
                 quality["accepted"] += 1
+                quality_by_id["accepted"] += 1
                 related_tickers = _related_tickers_for_title(title, due_tickers)
                 article, created = await article_repo.upsert_article(
                     source_id=item["source_id"],
@@ -669,6 +684,7 @@ class SchedulerNodes:
                 )
                 if created:
                     quality["saved"] += 1
+                    quality_by_id["saved"] += 1
                     saved_articles.append(
                         {
                             "id": article.id,
@@ -680,6 +696,7 @@ class SchedulerNodes:
                 else:
                     duplicate_article_count += 1
                     quality["duplicates"] += 1
+                    quality_by_id["duplicates"] += 1
 
             for snapshot in state.get("market_snapshots", []):
                 await market_repo.save_snapshot(
@@ -688,6 +705,23 @@ class SchedulerNodes:
                     percent_change=snapshot["percent_change"],
                     indicators=snapshot["indicators"],
                 )
+
+            source_repo = SourceRepository(session)
+            for source_id, quality in source_quality_by_id.items():
+                await source_repo.record_source_quality(source_id, **quality)
+                source = await source_repo.get_by_id(source_id)
+                if source is not None:
+                    health = score_source_health(
+                        config=dict(source.config or {}),
+                        last_success_at=source.last_success_at,
+                        last_fetched_at=source.last_fetched_at,
+                        last_error=source.last_error,
+                    )
+                    config = dict(source.config or {})
+                    metrics = dict(config.get("source_health") or {})
+                    metrics.update(health.as_dict())
+                    config["source_health"] = metrics
+                    source.config = config
 
             await session.commit()
 
@@ -932,6 +966,16 @@ def _source_is_due(source: Source, settings: Settings, now: datetime | None = No
         settings.source_default_fetch_interval_seconds,
     )
     return (now - last_fetched_at).total_seconds() >= max(interval, 0)
+
+
+def _source_health_suppressed(source: Source, settings: Settings) -> bool:
+    return source_is_suppressed(
+        config=dict(source.config or {}),
+        last_success_at=source.last_success_at,
+        last_fetched_at=source.last_fetched_at,
+        last_error=source.last_error,
+        minimum_score=settings.source_health_min_score,
+    )
 
 
 def _pipeline_scope(job_type: str, explicit_scope: object = None) -> str:

@@ -134,6 +134,7 @@ PYTHONPATH=src .venv/bin/ruff check .
 ## Telegram Commands
 
 - `/research`, `/candidates`, `/signals <ticker>`, `/researchstatus`
+- `/sourcehealth`
 - `/sources`, `/addsource <provider> <target>`, `/sourceconfig <id> <key> <value>`, `/sourcefields <id> <field> <value>`, `/sourcetest <id>`, `/removesource <id>`
 - `/refresh [pipeline]`
 - `/runtime`, `/job <run-id>`, `/trace <run-id>`, `/step <run-id> <step-name>`, `/alerts`
@@ -186,6 +187,22 @@ Run market-research answer evaluation:
 
 ```bash
 PYTHONPATH=src .venv/bin/news-agent-eval
+```
+
+If the script entrypoint is missing in an older virtualenv, run:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m news_agent.evaluation.runner
+```
+
+Useful research-quality knobs:
+
+```bash
+SOURCE_HEALTH_MIN_SCORE=35
+SIGNAL_MIN_STRONG_EVIDENCE_SOURCES=2
+SIGNAL_ALLOW_DEVELOPING_DEFAULT=false
+EVIDENCE_LINK_RECHECK_HOURS=24
+RESEARCH_REPORT_MAX_EVIDENCE_ITEMS=3
 ```
 
 ## Runtime Alerts

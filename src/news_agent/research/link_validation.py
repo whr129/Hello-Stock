@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import TypeAlias
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -16,9 +17,17 @@ async def validate_candidate_links(
     explanations: list[CandidateExplanation],
     *,
     checker: LinkChecker | None = None,
+    recheck_hours: int = 24,
 ) -> list[CandidateExplanation]:
     return await asyncio.gather(
-        *[_validated_explanation(explanation, checker=checker) for explanation in explanations]
+        *[
+            _validated_explanation(
+                explanation,
+                checker=checker,
+                recheck_hours=recheck_hours,
+            )
+            for explanation in explanations
+        ]
     )
 
 
@@ -26,9 +35,13 @@ async def _validated_explanation(
     explanation: CandidateExplanation,
     *,
     checker: LinkChecker | None,
+    recheck_hours: int,
 ) -> CandidateExplanation:
     evidence = await asyncio.gather(
-        *[_validated_evidence_item(item, checker=checker) for item in explanation.evidence]
+        *[
+            _validated_evidence_item(item, checker=checker, recheck_hours=recheck_hours)
+            for item in explanation.evidence
+        ]
     )
     linked_source_count = len(
         {
@@ -56,14 +69,21 @@ async def _validated_evidence_item(
     item: dict[str, object],
     *,
     checker: LinkChecker | None,
+    recheck_hours: int,
 ) -> dict[str, object]:
     url = str(item.get("article_url") or "").strip()
     if not url:
-        return {**item, "article_url_status": "missing"}
+        return {**item, "article_url_status": "missing", "link_status": "missing"}
+    if _recently_checked(item, recheck_hours=recheck_hours):
+        status = str(item.get("article_url_status") or item.get("link_status") or "unchecked")
+        return {**item, "article_url_status": status, "link_status": status}
     available = await _check_url(url, checker=checker)
+    status = "available" if available else "unavailable"
     return {
         **item,
-        "article_url_status": "available" if available else "unavailable",
+        "article_url_status": status,
+        "link_status": status,
+        "link_checked_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -129,3 +149,19 @@ def _is_direct_high_impact(item: dict[str, object]) -> bool:
         return True
     direct_names = ("sec", "nvidia", "federal reserve", "treasury", "bls", "bea")
     return any(marker in source_name or marker in title for marker in direct_names)
+
+
+def _recently_checked(item: dict[str, object], *, recheck_hours: int) -> bool:
+    status = str(item.get("article_url_status") or item.get("link_status") or "")
+    if status not in {"available", "unavailable"}:
+        return False
+    checked_at = str(item.get("link_checked_at") or "").strip()
+    if not checked_at:
+        return False
+    try:
+        parsed = datetime.fromisoformat(checked_at)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return datetime.now(UTC) - parsed <= timedelta(hours=max(recheck_hours, 0))

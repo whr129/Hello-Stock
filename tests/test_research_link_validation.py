@@ -30,6 +30,8 @@ async def test_validate_candidate_links_marks_available_urls() -> None:
     assert checked[0].linked_source_count == 2
     assert checked[0].evidence_strength == "strong"
     assert {item["article_url_status"] for item in checked[0].evidence} == {"available"}
+    assert {item["link_status"] for item in checked[0].evidence} == {"available"}
+    assert all(item["link_checked_at"] for item in checked[0].evidence)
 
 
 @pytest.mark.asyncio
@@ -57,3 +59,4 @@ async def test_validate_candidate_links_downgrades_failed_links() -> None:
     assert checked[0].linked_source_count == 0
     assert checked[0].evidence_strength == "weak"
     assert checked[0].evidence[0]["article_url_status"] == "unavailable"
+    assert checked[0].evidence[0]["link_status"] == "unavailable"

@@ -55,6 +55,39 @@ def test_price_and_volume_components_use_snapshot_indicators() -> None:
     assert score.components.volume_signal > 50
 
 
+def test_score_includes_evidence_quality_and_novelty() -> None:
+    scorer = SignalScorer(Settings(openai_api_key=""))
+    aggregate = MentionAggregate(
+        "NVDA",
+        "AI infrastructure",
+        4,
+        2,
+        0.9,
+        datetime.now(UTC),
+        [
+            {
+                "article_url": "https://example.com/nvda",
+                "source_name": "Nvidia",
+                "trust_score": 0.98,
+                "source_health_score": 90,
+                "evidence_cluster_id": "company:nvda",
+            },
+            {
+                "article_url": "https://example.com/capex",
+                "source_name": "Cloud Buyer",
+                "trust_score": 0.9,
+                "source_health_score": 80,
+                "evidence_cluster_id": "filing:capex",
+            },
+        ],
+    )
+
+    score = scorer.score(aggregate, window="24h", theme_memory_count=0)
+
+    assert score.components.evidence_quality > 70
+    assert score.components.novelty > 80
+
+
 def test_candidate_explanation_flags_missing_links_and_stale_single_source() -> None:
     snapshot = MarketSignalSnapshot(
         ticker="MU",
@@ -197,6 +230,36 @@ def test_visible_candidates_deduplicate_same_ticker_theme_signal() -> None:
     assert len(visible) == 1
     assert visible[0].rank == 1
     assert visible[0].theme == "AI"
+
+
+def test_duplicate_evidence_clusters_do_not_make_candidate_strong() -> None:
+    snapshot = MarketSignalSnapshot(
+        ticker="NVDA",
+        theme="AI infrastructure",
+        window="24h",
+        total_score=82,
+        evidence=[
+            {
+                "article_title": "Nvidia demand accelerates",
+                "article_url": "https://example.com/nvidia-a",
+                "source_name": "Source A",
+                "trust_score": 0.8,
+                "evidence_cluster_id": "wire:nvidia demand accelerates",
+            },
+            {
+                "article_title": "Nvidia demand accelerates",
+                "article_url": "https://example.com/nvidia-b",
+                "source_name": "Source B",
+                "trust_score": 0.8,
+                "evidence_cluster_id": "wire:nvidia demand accelerates",
+            },
+        ],
+        created_at=datetime.now(UTC),
+    )
+
+    explanation = explain_candidates([snapshot])[0]
+
+    assert explanation.evidence_strength == "developing"
 
 
 def test_mention_evidence_payload_includes_article_and_source_links() -> None:

@@ -42,8 +42,26 @@ async def test_normalize_dedupe_saves_only_market_impact_articles(monkeypatch) -
         async def save_snapshot(self, **kwargs):
             del kwargs
 
+    class FakeSourceRepository:
+        def __init__(self, session) -> None:
+            del session
+            self.source = SimpleNamespace(
+                config={},
+                last_success_at=datetime.now(UTC),
+                last_fetched_at=datetime.now(UTC),
+                last_error=None,
+            )
+
+        async def record_source_quality(self, source_id, **kwargs):
+            del source_id, kwargs
+
+        async def get_by_id(self, source_id):
+            del source_id
+            return self.source
+
     monkeypatch.setattr("news_agent.graph.nodes.ArticleRepository", FakeArticleRepository)
     monkeypatch.setattr("news_agent.graph.nodes.MarketRepository", FakeMarketRepository)
+    monkeypatch.setattr("news_agent.graph.nodes.SourceRepository", FakeSourceRepository)
 
     node = SchedulerNodes.__new__(SchedulerNodes)
     node.session_factory = lambda: _FakeSessionContext()

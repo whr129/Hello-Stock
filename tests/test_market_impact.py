@@ -101,6 +101,28 @@ async def test_llm_classification_rejects_uncertain_non_market_item() -> None:
 
 
 @pytest.mark.asyncio
+async def test_llm_classification_rejects_invalid_boolean_contract() -> None:
+    classifier = MarketImpactClassifier(
+        Settings(
+            openai_api_key="test",
+            llm_market_impact_classification_enabled=True,
+        )
+    )
+    classifier.client = _FakeClient(
+        '{"accepted": "false", "confidence": 0.91, "reason": "not relevant"}'
+    )
+
+    decision = await classifier.classify(
+        title="Unclear update",
+        text="Details were sparse.",
+        category="general",
+    )
+
+    assert decision.accepted is False
+    assert decision.method == "deterministic_uncertain"
+
+
+@pytest.mark.asyncio
 async def test_llm_classification_failure_rejects_uncertain_item() -> None:
     classifier = MarketImpactClassifier(
         Settings(

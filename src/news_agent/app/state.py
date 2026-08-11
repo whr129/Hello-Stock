@@ -26,6 +26,7 @@ Intent = Literal[
     "candidates",
     "signals",
     "researchstatus",
+    "sourcehealth",
     "skills",
     "help",
     "general_chat",

@@ -35,6 +35,8 @@ class SignalScorer:
         volume_signal = _volume_score(market_snapshot)
         trust_score = max(0.0, min(100.0, aggregate.average_trust * 100.0))
         theme_persistence = min(100.0, theme_memory_count * 25.0)
+        evidence_quality = _evidence_quality_score(aggregate.evidence)
+        novelty = _novelty_score(theme_memory_count)
 
         components = ScoreComponents(
             mention_velocity=mention_velocity,
@@ -45,6 +47,8 @@ class SignalScorer:
             volume_signal=volume_signal,
             theme_persistence=theme_persistence,
             trust_score=trust_score,
+            evidence_quality=evidence_quality,
+            novelty=novelty,
         )
         total_score = self.weighted_total(components)
         return CandidateScore(
@@ -81,6 +85,11 @@ class SignalScorer:
                 self.settings.signal_weight_theme_persistence,
             ),
             "trust_score": (components.trust_score, self.settings.signal_weight_trust),
+            "evidence_quality": (
+                components.evidence_quality,
+                self.settings.signal_weight_evidence_quality,
+            ),
+            "novelty": (components.novelty, self.settings.signal_weight_novelty),
         }
         weight_sum = sum(weight for _, weight in weighted.values())
         if weight_sum <= 0:
@@ -114,3 +123,51 @@ def _volume_score(snapshot: MarketSnapshot | None) -> float:
     if indicators.get("abnormal_volume"):
         return 75.0
     return 50.0
+
+
+def _evidence_quality_score(evidence: list[dict[str, object]]) -> float:
+    if not evidence:
+        return 0.0
+    linked = sum(1 for item in evidence if item.get("article_url"))
+    source_names = {
+        item.get("source_name") or item.get("source_family") or item.get("source_provider")
+        for item in evidence
+        if item.get("source_name") or item.get("source_family") or item.get("source_provider")
+    }
+    clusters = {
+        item.get("evidence_cluster_id")
+        for item in evidence
+        if item.get("evidence_cluster_id")
+    }
+    trust_values = [_float(item.get("trust_score")) * 100.0 for item in evidence]
+    health_values = [
+        _float(item.get("source_health_score"))
+        for item in evidence
+        if item.get("source_health_score") is not None
+    ]
+    linked_score = min(100.0, linked * 35.0)
+    source_score = min(100.0, len(source_names) * 30.0)
+    cluster_score = min(100.0, len(clusters or source_names) * 25.0)
+    trust_score = sum(trust_values) / max(len(trust_values), 1)
+    health_score = sum(health_values) / len(health_values) if health_values else 75.0
+    return round(
+        linked_score * 0.25
+        + source_score * 0.20
+        + cluster_score * 0.20
+        + trust_score * 0.25
+        + health_score * 0.10,
+        2,
+    )
+
+
+def _novelty_score(theme_memory_count: int) -> float:
+    if theme_memory_count <= 0:
+        return 85.0
+    return max(20.0, 85.0 - theme_memory_count * 20.0)
+
+
+def _float(value: object) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0

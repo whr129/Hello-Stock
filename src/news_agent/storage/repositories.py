@@ -6,6 +6,7 @@ from uuid import UUID as PythonUUID
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from news_agent.research.source_health import update_source_health_metrics
 from news_agent.settings import Settings
 from news_agent.storage.models import (
     Article,
@@ -61,11 +62,19 @@ def _mention_evidence_payload(
     article: Article | None,
     source: Source | None,
 ) -> dict[str, object]:
+    article_url = article.url if article else None
+    source_config = dict(source.config or {}) if source else {}
+    source_health = dict(source_config.get("source_health") or {})
     return {
         "article_id": mention.article_id,
         "summary_id": mention.summary_id,
         "source_id": mention.source_id,
         **_article_source_evidence_fields(article, source),
+        "link_status": "unchecked" if article_url else "missing",
+        "link_checked_at": None,
+        "source_health_score": source_health.get("score"),
+        "evidence_cluster_id": _evidence_cluster_id(article, source),
+        "evidence_reason": _evidence_reason(mention, article, source),
         "text": mention.evidence_text or "",
         "evidence_text": mention.evidence_text or "",
         "source_family": mention.source_family,
@@ -86,6 +95,27 @@ def _article_source_evidence_fields(
         "source_name": source.name if source else None,
         "source_provider": source.provider if source else None,
     }
+
+
+def _evidence_cluster_id(article: Article | None, source: Source | None) -> str | None:
+    if article is None:
+        return None
+    source_family = source.provider if source else article.category
+    normalized_title = " ".join((article.title or "").lower().split())[:80]
+    return f"{source_family or 'source'}:{normalized_title}"
+
+
+def _evidence_reason(
+    mention: MarketMention,
+    article: Article | None,
+    source: Source | None,
+) -> str:
+    source_label = source.name if source else mention.source_family
+    title = article.title if article else "stored evidence"
+    return (
+        f"{source_label} is the stored source for "
+        f"{mention.ticker or mention.theme or 'this signal'} via {title}."
+    )
 
 
 def _select_preferred_signal_snapshots(
@@ -167,6 +197,10 @@ class SourceRepository:
         result = await self.session.execute(
             select(Source).where(Source.enabled.is_(True)).order_by(Source.name)
         )
+        return list(result.scalars())
+
+    async def list_all(self) -> list[Source]:
+        result = await self.session.execute(select(Source).order_by(Source.name))
         return list(result.scalars())
 
     async def get_by_id(self, source_id: int) -> Source | None:
@@ -270,6 +304,38 @@ class SourceRepository:
             source.last_error = None
         else:
             source.last_error = error
+            source.config = update_source_health_metrics(
+                dict(source.config or {}),
+                failed=1,
+                checked_at=fetched_at,
+            )
+        await self.session.flush()
+
+    async def record_source_quality(
+        self,
+        source_id: int,
+        *,
+        fetched: int = 0,
+        accepted: int = 0,
+        rejected: int = 0,
+        saved: int = 0,
+        duplicates: int = 0,
+        link_checked: int = 0,
+        link_available: int = 0,
+    ) -> None:
+        source = await self.get_by_id(source_id)
+        if source is None:
+            return
+        source.config = update_source_health_metrics(
+            dict(source.config or {}),
+            fetched=fetched,
+            accepted=accepted,
+            rejected=rejected,
+            saved=saved,
+            duplicates=duplicates,
+            link_checked=link_checked,
+            link_available=link_available,
+        )
         await self.session.flush()
 
     async def ensure_default_sources(
@@ -692,6 +758,20 @@ class MarketSignalRepository:
         if updated:
             await self.session.flush()
         return updated
+
+    async def update_snapshot_evidence(
+        self,
+        snapshot_id: int,
+        evidence: list[dict[str, object]],
+    ) -> bool:
+        result = await self.session.execute(
+            update(MarketSignalSnapshot)
+            .where(MarketSignalSnapshot.id == snapshot_id)
+            .values(evidence=evidence)
+            .returning(MarketSignalSnapshot.id)
+        )
+        await self.session.flush()
+        return result.scalar_one_or_none() is not None
 
     async def delete_created_before(self, cutoff: datetime) -> int:
         result = await self.session.execute(
