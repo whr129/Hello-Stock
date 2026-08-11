@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: news_agent
       POSTGRES_PASSWORD: news_agent
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -14,6 +14,54 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  migrate:
+    build:
+      context: .
+    image: ${NEWS_AGENT_IMAGE:-news-agent:local}
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://news_agent:news_agent@postgres:5432/news_agent
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["app"]
+    restart: "no"
+
+  bot:
+    build:
+      context: .
+    image: ${NEWS_AGENT_IMAGE:-news-agent:local}
+    command: ["news-agent"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://news_agent:news_agent@postgres:5432/news_agent
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    profiles: ["app"]
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: .
+    image: ${NEWS_AGENT_IMAGE:-news-agent:local}
+    command: ["news-agent-scheduler"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://news_agent:news_agent@postgres:5432/news_agent
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    profiles: ["app"]
+    restart: unless-stopped
 
 volumes:
   postgres-data:
