@@ -12,5 +12,6 @@ __pycache__
 *.py[cod]
 *.log
 reports
+backups
 tmux
 postgres-data

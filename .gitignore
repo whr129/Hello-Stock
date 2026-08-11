@@ -46,6 +46,7 @@ pip-wheel-metadata/
 *.sqlite
 *.sqlite3
 postgres-data/
+backups/
 data/
 tmp/
 temp/

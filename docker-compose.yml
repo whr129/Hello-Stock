@@ -2,18 +2,22 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_DB: news_agent
-      POSTGRES_USER: news_agent
-      POSTGRES_PASSWORD: news_agent
-    ports:
-      - "${POSTGRES_HOST_PORT:-5433}:5432"
+      POSTGRES_DB: ${POSTGRES_DB:-news_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-news_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U news_agent -d news_agent"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
+    networks: [database]
+    restart: unless-stopped
 
   migrate:
     build:
@@ -24,11 +28,12 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: postgresql+asyncpg://news_agent:news_agent@postgres:5432/news_agent
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-news_agent}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-news_agent}
     depends_on:
       postgres:
         condition: service_healthy
     profiles: ["app"]
+    networks: [database]
     restart: "no"
 
   bot:
@@ -40,11 +45,12 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: postgresql+asyncpg://news_agent:news_agent@postgres:5432/news_agent
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-news_agent}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-news_agent}
     depends_on:
       migrate:
         condition: service_completed_successfully
     profiles: ["app"]
+    networks: [default, database]
     restart: unless-stopped
 
   scheduler:
@@ -56,12 +62,17 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: postgresql+asyncpg://news_agent:news_agent@postgres:5432/news_agent
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-news_agent}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-news_agent}
     depends_on:
       migrate:
         condition: service_completed_successfully
     profiles: ["app"]
+    networks: [default, database]
     restart: unless-stopped
 
 volumes:
   postgres-data:
+
+networks:
+  database:
+    internal: true

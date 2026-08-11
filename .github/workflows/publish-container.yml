@@ -26,11 +26,15 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+      image: ${{ steps.image.outputs.name }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
       - name: Normalize image name
-        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Log in to GitHub Container Registry
@@ -43,13 +47,14 @@ jobs:
         id: metadata
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ env.IMAGE_NAME }}
+          images: ${{ steps.image.outputs.name }}
           tags: |
             type=ref,event=branch
             type=ref,event=tag
             type=sha
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
       - name: Build and publish image
+        id: publish
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -60,3 +65,51 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
+
+  deploy:
+    name: Deploy application and database server
+    needs: publish
+    if: github.ref == 'refs/heads/main' && vars.ENABLE_PRODUCTION_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+      DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+      NEWS_AGENT_IMAGE: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_PORT"
+          test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_SSH_PRIVATE_KEY"
+          test -n "$DEPLOY_SSH_KNOWN_HOSTS"
+          test -n "$NEWS_AGENT_IMAGE"
+      - name: Configure SSH
+        shell: bash
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Upload deployment files
+        shell: bash
+        run: |
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p ~/news-agent/scripts"
+          scp -P "$DEPLOY_PORT" docker-compose.yml \
+            "$DEPLOY_USER@$DEPLOY_HOST:news-agent/docker-compose.yml"
+          scp -P "$DEPLOY_PORT" scripts/backup-database.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:news-agent/scripts/backup-database.sh"
+      - name: Deploy immutable image
+        shell: bash
+        run: |
+          remote_image=$(printf '%q' "$NEWS_AGENT_IMAGE")
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd ~/news-agent && chmod 700 scripts/backup-database.sh && NEWS_AGENT_IMAGE=$remote_image docker compose --profile app pull && NEWS_AGENT_IMAGE=$remote_image docker compose --profile app up -d --no-build --remove-orphans && docker compose --profile app ps"
