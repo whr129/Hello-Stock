@@ -1,6 +1,6 @@
 import pytest
 
-from news_agent.agent.intent import IntentClassifier, ROUTER_SYSTEM_PROMPT
+from news_agent.agent.intent import ROUTER_SYSTEM_PROMPT, IntentClassifier
 from news_agent.settings import Settings
 
 
@@ -41,11 +41,22 @@ class FakeClient:
 async def test_intent_classifier_uses_command_without_llm() -> None:
     classifier = IntentClassifier(Settings(openai_api_key=""))
 
+    command, args, intent = await classifier.classify("/research AAPL")
+
+    assert command == "/research"
+    assert args == ["AAPL"]
+    assert intent == "research"
+
+
+@pytest.mark.asyncio
+async def test_intent_classifier_removed_command_is_unknown() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key=""))
+
     command, args, intent = await classifier.classify("/watch AAPL")
 
     assert command == "/watch"
     assert args == ["AAPL"]
-    assert intent == "watch"
+    assert intent == "unknown"
 
 
 @pytest.mark.asyncio
@@ -58,37 +69,46 @@ async def test_intent_classifier_falls_back_to_general_chat_without_llm() -> Non
 
 
 @pytest.mark.asyncio
+async def test_intent_classifier_routes_removed_features_to_help_without_llm() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key=""))
+
+    _, _, intent = await classifier.classify("Create an NVDA watchlist and daily recap")
+
+    assert intent == "help"
+
+
+@pytest.mark.asyncio
 async def test_intent_classifier_uses_llm_router_for_company_ticker() -> None:
     classifier = IntentClassifier(Settings(openai_api_key="test"))
-    classifier.client = FakeClient('{"intent": "stocks", "args": ["GOOGL"]}')
+    classifier.client = FakeClient('{"intent": "general_chat", "args": []}')
 
     command, args, intent = await classifier.classify("give me price for Google")
 
     assert command == ""
-    assert args == ["GOOGL"]
-    assert intent == "stocks"
+    assert args == []
+    assert intent == "general_chat"
 
 
 @pytest.mark.asyncio
-async def test_intent_classifier_uses_llm_router_for_market_news() -> None:
+async def test_intent_classifier_uses_llm_router_for_market_research() -> None:
     classifier = IntentClassifier(Settings(openai_api_key="test"))
-    classifier.client = FakeClient('{"intent": "brief", "args": []}')
+    classifier.client = FakeClient('{"intent": "research", "args": []}')
 
     _, args, intent = await classifier.classify("what happened to the stock market today")
 
     assert args == []
-    assert intent == "brief"
+    assert intent == "research"
 
 
 @pytest.mark.asyncio
-async def test_intent_classifier_uses_llm_router_for_mixed_request() -> None:
+async def test_intent_classifier_uses_llm_router_for_market_impact_request() -> None:
     classifier = IntentClassifier(Settings(openai_api_key="test"))
-    classifier.client = FakeClient('{"intent": "brief", "args": ["NVDA"]}')
+    classifier.client = FakeClient('{"intent": "research", "args": ["NVDA"]}')
 
-    _, args, intent = await classifier.classify("brief me on nvidia and today's ai news")
+    _, args, intent = await classifier.classify("research nvidia and today's ai news")
 
     assert args == ["NVDA"]
-    assert intent == "brief"
+    assert intent == "research"
 
 
 @pytest.mark.asyncio
@@ -102,6 +122,49 @@ async def test_intent_classifier_uses_llm_router_for_runtime_request() -> None:
     assert intent == "runtime"
 
 
+@pytest.mark.asyncio
+async def test_intent_classifier_falls_back_to_resources_without_llm() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key=""))
+
+    _, args, intent = await classifier.classify("show me what resources I have now")
+
+    assert args == []
+    assert intent == "resources"
+
+
+@pytest.mark.asyncio
+async def test_intent_classifier_falls_back_to_sourcepack_without_llm() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key=""))
+
+    _, args, intent = await classifier.classify("list sources I can check")
+
+    assert args == []
+    assert intent == "sourcepack"
+
+
+@pytest.mark.asyncio
+async def test_intent_classifier_uses_llm_router_for_resources() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key="test"))
+    classifier.client = FakeClient('{"intent": "resources", "args": []}')
+
+    _, args, intent = await classifier.classify("how many stored resources do I have?")
+
+    assert args == []
+    assert intent == "resources"
+
+
+@pytest.mark.asyncio
+async def test_intent_classifier_uses_llm_router_for_sourcepack() -> None:
+    classifier = IntentClassifier(Settings(openai_api_key="test"))
+    classifier.client = FakeClient('{"intent": "sourcepack", "args": []}')
+
+    _, args, intent = await classifier.classify("what default feeds are available?")
+
+    assert args == []
+    assert intent == "sourcepack"
+
+
 def test_router_prompt_mentions_supported_outputs() -> None:
-    assert '"intent": "brief" | "stocks" | "runtime" | "general_chat" | "help"' in ROUTER_SYSTEM_PROMPT
+    assert '"intent": "runtime" | "research"' in ROUTER_SYSTEM_PROMPT
+    assert '"sourcepack" | "resources" | "general_chat" | "help"' in ROUTER_SYSTEM_PROMPT
     assert "Return only valid JSON" in ROUTER_SYSTEM_PROMPT

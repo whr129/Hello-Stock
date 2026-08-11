@@ -1,0 +1,61 @@
+from news_agent.research.planner import PlannerAgent
+
+
+def test_research_command_produces_deep_research_plan() -> None:
+    plan = PlannerAgent().plan(
+        command="/research",
+        args=[],
+        message_text="/research",
+    )
+
+    assert plan.task_type == "deep_research"
+    assert plan.research_horizon == "30d"
+    assert plan.constraints.max_candidates == 3
+    assert "analysis" in plan.agents_to_run
+    assert "macro" in plan.agents_to_run
+    assert "filings" in plan.agents_to_run
+
+
+def test_candidates_command_produces_candidate_ranking_plan() -> None:
+    plan = PlannerAgent().plan(
+        command="/candidates",
+        args=[],
+        message_text="/candidates",
+    )
+
+    assert plan.task_type == "candidate_ranking"
+    assert plan.constraints.max_candidates == 3
+
+
+def test_signals_command_extracts_ticker() -> None:
+    plan = PlannerAgent().plan(
+        command="/signals",
+        args=["mu"],
+        message_text="/signals mu",
+    )
+
+    assert plan.task_type == "stock_lookup"
+    assert plan.entities.tickers == ["MU"]
+
+
+def test_sourcehealth_command_produces_source_health_plan() -> None:
+    plan = PlannerAgent().plan(
+        command="/sourcehealth",
+        args=[],
+        message_text="/sourcehealth",
+    )
+
+    assert plan.task_type == "source_health"
+    assert plan.constraints.max_candidates == 3
+
+
+def test_research_command_extracts_sector_terms_without_ai_as_ticker() -> None:
+    plan = PlannerAgent().plan(
+        command="/research",
+        args=["semiconductor", "AI", "infrastructure"],
+        message_text="/research semiconductor AI infrastructure",
+    )
+
+    assert plan.entities.tickers == []
+    assert {"AI", "AI infrastructure", "semiconductors"} <= set(plan.entities.sectors)
+    assert plan.entities.themes == plan.entities.sectors

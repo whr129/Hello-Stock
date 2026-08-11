@@ -17,7 +17,16 @@ class FeedArticle:
 
 
 def parse_feed(url: str, timeout_seconds: int = 15) -> list[FeedArticle]:
-    request = Request(url, headers={"User-Agent": "news-agent/0.1"})
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "news-agent/0.1 (market-research RSS reader)",
+            "Accept": (
+                "application/rss+xml, application/atom+xml, application/xml, "
+                "text/xml;q=0.9, */*;q=0.8"
+            ),
+        },
+    )
     with urlopen(request, timeout=timeout_seconds) as response:
         payload = response.read()
 

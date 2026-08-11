@@ -1,43 +1,69 @@
-from typing import Any
+import json
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
 
-from zoneinfo import ZoneInfoNotFoundError
-
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from news_agent.agent.chains import build_brief_response
-from news_agent.agent.ranking import rank_articles
-from news_agent.app.state import AgentResult, SupervisorState
 from news_agent.agent.router import skills_response
+from news_agent.app.state import AgentResult, SupervisorState
 from news_agent.ingestion.providers import IngestProviderRegistry
+from news_agent.memory.consolidation import MemoryConsolidationService
+from news_agent.memory.short_term import render_messages
 from news_agent.scheduler.service import (
     SchedulerControlService,
     parse_config_value,
-    validate_delivery_time,
-    validate_timezone,
 )
 from news_agent.settings import Settings
+from news_agent.storage.models import (
+    Article,
+    ArticleEmbedding,
+    ConversationEvent,
+    JobRun,
+    LongTermMemory,
+    MarketEntity,
+    MarketMention,
+    MarketSignalSnapshot,
+    MarketSnapshot,
+    MarketThemeMemory,
+    MemoryConsolidationJob,
+    RuntimeRun,
+    Source,
+    Summary,
+    SummaryEmbedding,
+)
 from news_agent.storage.repositories import (
     MemoryRepository,
-    PreferenceRepository,
     SourceRepository,
-    UserRepository,
 )
-from news_agent.storage.retrieval import RetrievalService
+
+
+@dataclass(frozen=True)
+class ResourceSection:
+    name: str
+    count: int
+    details: tuple[str, ...] = ()
+
+
+SOURCE_PACK_PATH = Path(__file__).resolve().parents[4] / "docs/market-research/default-sources.json"
 
 
 class NewsSubagent:
     def __init__(self, session_factory: async_sessionmaker, settings: Settings) -> None:
         self.session_factory = session_factory
         self.settings = settings
-        self.ingest_registry = IngestProviderRegistry()
+        self.ingest_registry = IngestProviderRegistry(settings)
         self.scheduler_control = SchedulerControlService(settings)
+        self.memory_service = MemoryConsolidationService(session_factory, settings)
 
     async def run(self, state: SupervisorState) -> AgentResult:
         capabilities = set(state.get("route", {}).get("capabilities", []))
         if "help" in capabilities:
             return {
                 "response": (
-                    "I can route requests between news coverage, market analysis, and general web search. "
+                    "I can route requests between market research, "
+                    "runtime inspection, and general web search. "
                     "Try /skills for the full command list, or ask a general question directly."
                 ),
                 "metadata": {"capability": "help"},
@@ -47,30 +73,39 @@ class NewsSubagent:
                 "response": skills_response(),
                 "metadata": {"capability": "skills"},
             }
+        if "resource_inventory" in capabilities:
+            return await self._resource_inventory(state)
         if "scheduler_admin" in capabilities:
-            return await self._scheduler_admin()
+            return await self._scheduler_admin(state)
         if "source_admin" in capabilities:
             return await self._source_admin(state)
-        if "topic_preferences" in capabilities:
-            return await self._topic_preferences(state)
-        if "local_preferences" in capabilities:
-            return await self._local_preferences(state)
-        if "recap_admin" in capabilities:
-            return await self._recap_admin(state)
         if "memory_admin" in capabilities:
             return await self._memory_admin(state)
-        return await self._news_brief(state)
+        return {
+            "response": (
+                "This assistant focuses on market-impact research, source management, "
+                "runtime inspection, and memory. Use /research, /candidates, /signals, "
+                "/sources, or /skills."
+            ),
+            "metadata": {"capability": "help"},
+        }
 
-    async def _scheduler_admin(self) -> AgentResult:
+    async def _scheduler_admin(self, state: SupervisorState) -> AgentResult:
+        pipeline = _parse_refresh_pipeline(state.get("args", []))
+        if pipeline is None:
+            return {
+                "response": _refresh_usage(),
+                "metadata": {"capability": "scheduler_admin", "status": "invalid_pipeline"},
+            }
         if not await self.scheduler_control.can_start_refresh():
             return {
                 "response": "A refresh job is already running. Try again in a moment.",
                 "metadata": {"capability": "scheduler_admin"},
             }
-        summary = await self.scheduler_control.run_refresh()
+        summary = await self.scheduler_control.run_refresh(job_type=pipeline)
         return {
             "response": self.scheduler_control.format_refresh_summary(summary),
-            "metadata": {"capability": "scheduler_admin"},
+            "metadata": {"capability": "scheduler_admin", "pipeline": pipeline},
         }
 
     async def _source_admin(self, state: SupervisorState) -> AgentResult:
@@ -100,32 +135,45 @@ class NewsSubagent:
                         "response": (
                             "Usage: /addsource <provider> <account-or-target>. "
                             "Examples: /addsource rss https://example.com/feed.xml, "
-                            "/addsource twitter @openai"
+                            "/addsource twitter @openai, "
+                            "/addsource newsletter example-newsletter"
                         ),
                         "metadata": {"capability": "source_admin"},
                     }
                 provider = args[0].lower()
                 external_account = args[1]
-                if provider not in {"rss", "twitter", "newsletter"}:
+                if provider not in {
+                    "rss",
+                    "twitter",
+                    "newsletter",
+                    "alpha_vantage",
+                    "finnhub",
+                    "polygon",
+                }:
                     return {
-                        "response": "Supported source providers: rss, twitter, newsletter.",
+                        "response": (
+                            "Supported source providers: rss, twitter, newsletter, "
+                            "alpha_vantage, finnhub, polygon."
+                        ),
                         "metadata": {"capability": "source_admin"},
                     }
                 config = {"feed_url": external_account} if provider == "rss" else {}
+                fetch_mode = "rss" if provider in {"rss", "twitter", "newsletter"} else None
                 source = await repository.add_source(
                     name=external_account,
                     provider=provider,
                     external_account=external_account,
                     owner_user_id=user_id,
                     config=config,
-                    fetch_mode="rss" if provider == "rss" else None,
+                    fetch_mode=fetch_mode,
                 )
                 await session.commit()
+                warning = _source_config_warning(source.provider, source.config)
                 return {
                     "response": (
                         f"Added source {source.name} [{source.provider}] "
                         f"{source.external_account}. "
-                        "Use /sourceconfig if you need extra provider settings."
+                        f"{warning}"
                     ),
                     "metadata": {"capability": "source_admin"},
                 }
@@ -151,8 +199,9 @@ class NewsSubagent:
                         "metadata": {"capability": "source_admin"},
                     }
                 await session.commit()
+                warning = _source_config_warning(source.provider, source.config)
                 return {
-                    "response": f"Updated source {source.id} config {key}={value}.",
+                    "response": f"Updated source {source.id} config {key}={value}. {warning}",
                     "metadata": {"capability": "source_admin"},
                 }
 
@@ -168,7 +217,11 @@ class NewsSubagent:
                         "response": "Usage: /sourcefields <source-id> <field> <mapped-value>",
                         "metadata": {"capability": "source_admin"},
                     }
-                source = await repository.update_field_mapping(source_id, args[1], " ".join(args[2:]))
+                source = await repository.update_field_mapping(
+                    source_id,
+                    args[1],
+                    " ".join(args[2:]),
+                )
                 if source is None:
                     return {
                         "response": "Source not found.",
@@ -198,8 +251,17 @@ class NewsSubagent:
                         "response": "Source not found.",
                         "metadata": {"capability": "source_admin"},
                     }
-                provider = self.ingest_registry.get(source.provider)
-                items = provider.fetch_items(source, timeout_seconds=self.settings.rss_fetch_timeout_seconds)
+                try:
+                    provider = self.ingest_registry.get(source.provider)
+                    items = provider.fetch_items(
+                        source,
+                        timeout_seconds=self.settings.rss_fetch_timeout_seconds,
+                    )
+                except ValueError as exc:
+                    return {
+                        "response": f"Source test failed: {exc}",
+                        "metadata": {"capability": "source_admin"},
+                    }
                 preview = "\n".join(f"- {item.title}" for item in items[:3]) or "- no items"
                 return {
                     "response": (
@@ -207,6 +269,12 @@ class NewsSubagent:
                         f"- Items fetched: {len(items)}\n"
                         f"- Preview:\n{preview}"
                     ),
+                    "metadata": {"capability": "source_admin"},
+                }
+
+            if command == "/sourcepack":
+                return {
+                    "response": _format_source_pack(args),
                     "metadata": {"capability": "source_admin"},
                 }
 
@@ -237,113 +305,6 @@ class NewsSubagent:
             "metadata": {"capability": "source_admin"},
         }
 
-    async def _topic_preferences(self, state: SupervisorState) -> AgentResult:
-        args = state.get("args", [])
-        async with self.session_factory() as session:
-            preference = await PreferenceRepository(session).set_topics(
-                state["user_context"]["user_id"],
-                args,
-            )
-            await session.commit()
-        state["user_context"]["topics"] = preference.topics
-        return {
-            "response": f"Topics updated: {', '.join(preference.topics)}",
-            "metadata": {"capability": "topic_preferences"},
-        }
-
-    async def _local_preferences(self, state: SupervisorState) -> AgentResult:
-        args = state.get("args", [])
-        if not args:
-            return {
-                "response": "Usage: /local Waterloo",
-                "metadata": {"capability": "local_preferences"},
-            }
-
-        local_region = " ".join(args)
-        async with self.session_factory() as session:
-            user = await UserRepository(session, self.settings).set_local_region(
-                state["user_context"]["user_id"],
-                local_region,
-            )
-            await session.commit()
-
-        state["user_context"]["local_region"] = user.local_region if user else local_region
-        return {
-            "response": f"Local region updated: {local_region}",
-            "metadata": {"capability": "local_preferences"},
-        }
-
-    async def _recap_admin(self, state: SupervisorState) -> AgentResult:
-        command = state.get("command", "")
-        args = state.get("args", [])
-        user_id = state["user_context"]["user_id"]
-        async with self.session_factory() as session:
-            preference_repo = PreferenceRepository(session)
-            user_repo = UserRepository(session, self.settings)
-            user = await user_repo.get_or_create_user(state["telegram_user_id"])
-            preference = await preference_repo.get_for_user(user_id)
-
-            if command == "/timezone":
-                if not args:
-                    return {
-                        "response": "Usage: /timezone Area/City",
-                        "metadata": {"capability": "recap_admin"},
-                    }
-                timezone_value = " ".join(args)
-                try:
-                    validate_timezone(timezone_value)
-                except ZoneInfoNotFoundError:
-                    return {
-                        "response": "Invalid timezone. Use an IANA timezone like America/Toronto.",
-                        "metadata": {"capability": "recap_admin"},
-                    }
-                user = await user_repo.set_timezone(user.id, timezone_value)
-                await session.commit()
-                return {
-                    "response": f"Timezone updated: {user.timezone if user else timezone_value}",
-                    "metadata": {"capability": "recap_admin"},
-                }
-
-            if command == "/recaptime":
-                if not args:
-                    return {
-                        "response": "Usage: /recaptime HH:MM",
-                        "metadata": {"capability": "recap_admin"},
-                    }
-                try:
-                    delivery_time = validate_delivery_time(args[0])
-                except ValueError:
-                    return {
-                        "response": "Invalid time. Use 24-hour format HH:MM.",
-                        "metadata": {"capability": "recap_admin"},
-                    }
-                preference = await preference_repo.set_delivery_time(user_id, delivery_time)
-                await session.commit()
-                return {
-                    "response": f"Daily recap time updated: {preference.delivery_time} ({user.timezone})",
-                    "metadata": {"capability": "recap_admin"},
-                }
-
-            if command == "/recapoff":
-                await preference_repo.clear_delivery_time(user_id)
-                await session.commit()
-                return {
-                    "response": "Daily recap disabled.",
-                    "metadata": {"capability": "recap_admin"},
-                }
-
-            if command == "/recapstatus":
-                status = preference.delivery_time or "disabled"
-                return {
-                    "response": f"Recap status: {status}\nTimezone: {user.timezone}",
-                    "metadata": {"capability": "recap_admin"},
-                }
-
-        return {
-            "response": "Recap preferences request could not be completed.",
-            "metadata": {"capability": "recap_admin"},
-        }
-
     async def _memory_admin(self, state: SupervisorState) -> AgentResult:
         command = state.get("command", "")
         args = state.get("args", [])
@@ -354,19 +315,17 @@ class NewsSubagent:
             if command == "/memory":
                 memories = await repository.list_for_user(user_id)
                 response_parts: list[str] = []
-                messages = state["user_context"].get("short_term_memory", {}).get("messages", [])[-8:]
+                messages = list(state.get("messages", []))
                 if messages:
                     response_parts.append(
-                        "Recent session memory:\n"
-                        + "\n".join(
-                            f"- {item.get('role')}: {item.get('content')}" for item in messages
-                        )
+                        "Recent session memory:\n" + "\n".join(render_messages(messages, limit=8))
                     )
                 if memories:
                     response_parts.append(
                         "Long-term memory:\n"
                         + "\n".join(
-                            f"- {memory.public_id}: {memory.memory_text}" for memory in memories
+                            f"- {memory.public_id}: [{memory.category}] {memory.memory_text}"
+                            for memory in memories
                         )
                     )
                 return {
@@ -388,8 +347,8 @@ class NewsSubagent:
                 }
 
             if command == "/resetmemory":
-                await repository.reset_learned(user_id)
                 await session.commit()
+                await self.memory_service.reset_user_state(user_id=user_id)
                 return {
                     "response": "Learned memory has been reset.",
                     "metadata": {"capability": "memory_admin"},
@@ -400,60 +359,379 @@ class NewsSubagent:
             "metadata": {"capability": "memory_admin"},
         }
 
-    async def _news_brief(self, state: SupervisorState) -> AgentResult:
-        user_context = state["user_context"]
-        requested_symbols = set(state.get("requested_symbols", []))
-        requested_symbols.update(user_context.get("watched_tickers", []))
+    async def _resource_inventory(self, state: SupervisorState) -> AgentResult:
+        user_id = state["user_context"]["user_id"]
+        telegram_user_id = state.get("telegram_user_id")
+        chat_id = state.get("chat_id")
 
         async with self.session_factory() as session:
-            context = await RetrievalService(session).retrieve_for_brief(
-                user_id=user_context["user_id"],
-                topics=user_context.get("topics", []),
-                tickers=sorted(requested_symbols),
-                article_max_age_hours=self.settings.news_freshness_hours,
-                summary_max_age_hours=self.settings.summary_freshness_hours,
-                snapshot_max_age_minutes=self.settings.snapshot_freshness_minutes,
+            sections = await _collect_resource_inventory(
+                session,
+                user_id=user_id,
+                telegram_user_id=telegram_user_id,
+                chat_id=chat_id,
             )
 
-        articles: list[dict[str, Any]] = [
-            {
-                "id": article.id,
-                "title": article.title,
-                "source": article.source_id,
-                "published_at": article.published_at,
-                "related_tickers": article.related_tickers,
-            }
-            for article in context.articles
-        ]
-        ranked_articles = rank_articles(
-            articles,
-            user_context.get("topics", []),
-            user_context.get("watched_tickers", []),
-            user_context.get("local_region"),
-        )
-        response = build_brief_response(
-            ranked_articles,
-            [summary.text for summary in context.summaries],
-            [
-                {
-                    "symbol": snapshot.symbol,
-                    "price": snapshot.price,
-                    "percent_change": snapshot.percent_change,
-                    "indicators": snapshot.indicators,
-                }
-                for snapshot in context.market_snapshots
-            ],
-            user_context.get("local_region", self.settings.default_local_region),
-        )
         return {
-            "response": response,
+            "response": _format_resource_inventory(sections),
             "metadata": {
-                "capability": "news_brief",
-                "article_count": len(ranked_articles),
-                "summary_count": len(context.summaries),
-                "needs_search_fallback": not ranked_articles and not context.summaries,
+                "capability": "resource_inventory",
+                "resource_counts": {section.name: section.count for section in sections},
             },
         }
+
+
+async def _collect_resource_inventory(
+    session,
+    *,
+    user_id: int,
+    telegram_user_id: int | None,
+    chat_id: int | None,
+) -> list[ResourceSection]:
+    source_repository = SourceRepository(session)
+    sources = await source_repository.list_enabled(user_id)
+    source_details = _source_details(sources)
+
+    memories = await _scalars(
+        session,
+        select(LongTermMemory)
+        .where(LongTermMemory.user_id == user_id)
+        .where(LongTermMemory.status == "active")
+        .order_by(LongTermMemory.updated_at.desc())
+        .limit(5),
+    )
+    memory_details = _join_details(
+        _format_count_pairs(
+            await _count_by(
+                session,
+                LongTermMemory,
+                LongTermMemory.category,
+                LongTermMemory.user_id == user_id,
+                LongTermMemory.status == "active",
+            ),
+            "categories",
+        ),
+        _format_recent_memories(memories),
+    )
+
+    runtime_filters = []
+    if telegram_user_id is not None:
+        runtime_filters.append(RuntimeRun.telegram_user_id == telegram_user_id)
+    elif chat_id is not None:
+        runtime_filters.append(RuntimeRun.chat_id == chat_id)
+    runtime_count = await _count(session, RuntimeRun, *runtime_filters)
+    runtime_details = _join_details(
+        _format_count_pairs(
+            await _count_by(session, RuntimeRun, RuntimeRun.status, *runtime_filters),
+            "statuses",
+        ),
+        _format_recent_runs(
+            await _scalars(
+                session,
+                select(RuntimeRun).where(*runtime_filters).order_by(RuntimeRun.started_at.desc()).limit(5),
+            )
+        ),
+    )
+
+    return [
+        ResourceSection("sources", len(sources), source_details),
+        ResourceSection(
+            "long_term_memories",
+            await _count(
+                session,
+                LongTermMemory,
+                LongTermMemory.user_id == user_id,
+                LongTermMemory.status == "active",
+            ),
+            memory_details,
+        ),
+        ResourceSection(
+            "conversation_events",
+            await _count(session, ConversationEvent, ConversationEvent.user_id == user_id),
+            _format_count_pairs(
+                await _count_by(
+                    session,
+                    ConversationEvent,
+                    ConversationEvent.role,
+                    ConversationEvent.user_id == user_id,
+                ),
+                "roles",
+            ),
+        ),
+        ResourceSection(
+            "memory_jobs",
+            await _count(
+                session,
+                MemoryConsolidationJob,
+                MemoryConsolidationJob.user_id == user_id,
+            ),
+            _format_count_pairs(
+                await _count_by(
+                    session,
+                    MemoryConsolidationJob,
+                    MemoryConsolidationJob.status,
+                    MemoryConsolidationJob.user_id == user_id,
+                ),
+                "statuses",
+            ),
+        ),
+        ResourceSection(
+            "articles",
+            await _count(session, Article),
+            _join_details(
+                _format_count_pairs(
+                    await _count_by(session, Article, Article.category),
+                    "categories",
+                ),
+                _format_recent_articles(
+                    await _scalars(
+                        session,
+                        select(Article).order_by(Article.created_at.desc()).limit(5),
+                    )
+                ),
+            ),
+        ),
+        ResourceSection("article_embeddings", await _count(session, ArticleEmbedding)),
+        ResourceSection(
+            "summaries",
+            await _count(session, Summary),
+            _format_count_pairs(
+                await _count_by(session, Summary, Summary.summary_type),
+                "types",
+            ),
+        ),
+        ResourceSection("summary_embeddings", await _count(session, SummaryEmbedding)),
+        ResourceSection(
+            "market_entities",
+            await _count(session, MarketEntity),
+            _format_count_pairs(
+                await _count_by(session, MarketEntity, MarketEntity.active),
+                "active",
+            ),
+        ),
+        ResourceSection(
+            "market_mentions",
+            await _count(session, MarketMention),
+            _format_count_pairs(
+                await _count_by(session, MarketMention, MarketMention.source_family),
+                "source families",
+            ),
+        ),
+        ResourceSection(
+            "signal_snapshots",
+            await _count(session, MarketSignalSnapshot),
+            _format_count_pairs(
+                await _count_by(session, MarketSignalSnapshot, MarketSignalSnapshot.window),
+                "windows",
+            ),
+        ),
+        ResourceSection("theme_memories", await _count(session, MarketThemeMemory)),
+        ResourceSection("market_snapshots", await _count(session, MarketSnapshot)),
+        ResourceSection("runtime_runs", runtime_count, runtime_details),
+        ResourceSection(
+            "job_runs",
+            await _count(session, JobRun),
+            _format_count_pairs(await _count_by(session, JobRun, JobRun.status), "statuses"),
+        ),
+    ]
+
+
+async def _count(session, model, *criteria) -> int:
+    statement = select(func.count()).select_from(model)
+    if criteria:
+        statement = statement.where(*criteria)
+    result = await session.execute(statement)
+    return int(result.scalar_one() or 0)
+
+
+async def _count_by(session, model, column, *criteria) -> list[tuple[object, int]]:
+    statement = select(column, func.count()).select_from(model)
+    if criteria:
+        statement = statement.where(*criteria)
+    result = await session.execute(statement.group_by(column).order_by(func.count().desc()))
+    return [(key, int(count)) for key, count in result.all()]
+
+
+async def _scalars(session, statement) -> list:
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+def _format_resource_inventory(sections: list[ResourceSection]) -> str:
+    lines = ["Resource inventory:"]
+    for section in sections:
+        lines.append(f"- {section.name}: {section.count}")
+        for detail in section.details:
+            lines.append(f"  {detail}")
+    return "\n".join(lines)
+
+
+def _source_details(sources: list[Source]) -> tuple[str, ...]:
+    if not sources:
+        return ()
+    provider_counts = Counter(source.provider for source in sources)
+    category_counts = Counter(source.category for source in sources)
+    unhealthy_count = sum(1 for source in sources if source.last_error)
+    details = [
+        _format_counter(provider_counts, "providers"),
+        _format_counter(category_counts, "categories"),
+    ]
+    if unhealthy_count:
+        details.append(f"last_error: {unhealthy_count}")
+    recent = ", ".join(
+        f"#{source.id} {source.name} [{source.provider}/{source.category}]"
+        for source in sources[:5]
+    )
+    if recent:
+        details.append(f"examples: {recent}")
+    return tuple(details)
+
+
+def _format_count_pairs(pairs: list[tuple[object, int]], label: str) -> tuple[str, ...]:
+    if not pairs:
+        return ()
+    return (_format_counter(Counter({str(key): count for key, count in pairs}), label),)
+
+
+def _format_counter(counter: Counter, label: str) -> str:
+    values = ", ".join(f"{key}: {count}" for key, count in counter.most_common(6))
+    return f"{label}: {values}"
+
+
+def _join_details(*groups: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(detail for group in groups for detail in group)
+
+
+def _format_recent_memories(memories: list[LongTermMemory]) -> tuple[str, ...]:
+    if not memories:
+        return ()
+    values = ", ".join(
+        f"{str(memory.public_id)[:8]} [{memory.category}] {_truncate(memory.memory_text, 48)}"
+        for memory in memories
+    )
+    return (f"recent: {values}",)
+
+
+def _format_recent_articles(articles: list[Article]) -> tuple[str, ...]:
+    if not articles:
+        return ()
+    values = ", ".join(f"#{article.id} {_truncate(article.title, 56)}" for article in articles)
+    return (f"recent: {values}",)
+
+
+def _format_recent_runs(runs: list[RuntimeRun]) -> tuple[str, ...]:
+    if not runs:
+        return ()
+    values = ", ".join(f"#{run.id} {run.workflow}/{run.status}" for run in runs)
+    return (f"recent: {values}",)
+
+
+def _truncate(value: str, limit: int) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
+
+
+def _source_config_warning(provider: str, config: dict | None) -> str:
+    normalized = provider.strip().lower()
+    if normalized == "rss":
+        return "RSS sources use the feed URL from /addsource or config.feed_url."
+    if normalized in {"twitter", "newsletter"} and not (config or {}).get("feed_url"):
+        return (
+            f"Set /sourceconfig <source-id> feed_url <rss-or-bridge-url> before fetching "
+            f"this {normalized} source."
+        )
+    if normalized == "twitter":
+        return "This X.com source is feed-backed; no official X API key is used."
+    if normalized == "newsletter":
+        return "This newsletter source is feed-backed."
+    if normalized == "alpha_vantage":
+        return "Set ALPHA_VANTAGE_API_KEY or config.api_key before fetching."
+    if normalized == "finnhub":
+        return "Set FINNHUB_API_KEY or config.api_key before fetching."
+    if normalized == "polygon":
+        return "Set POLYGON_API_KEY or config.api_key before fetching."
+    return ""
+
+
+def _parse_refresh_pipeline(args: list[str]) -> str | None:
+    if not args:
+        return "manual_refresh"
+    normalized = args[0].strip().lower().replace("-", "_")
+    aliases = {
+        "all": "manual_refresh",
+        "manual": "manual_refresh",
+        "manual_refresh": "manual_refresh",
+        "market": "market_prices",
+        "price": "market_prices",
+        "prices": "market_prices",
+        "market_price": "market_prices",
+        "market_prices": "market_prices",
+        "breaking": "breaking_resources",
+        "important": "breaking_resources",
+        "resources": "breaking_resources",
+        "breaking_resources": "breaking_resources",
+        "daily": "daily_resources",
+        "general": "daily_resources",
+        "daily_resources": "daily_resources",
+    }
+    return aliases.get(normalized)
+
+
+def _refresh_usage() -> str:
+    return (
+        "Usage: /refresh [market_prices|breaking_resources|daily_resources|all]. "
+        "Aliases: prices, breaking, daily."
+    )
+
+
+def _format_source_pack(args: list[str] | None = None) -> str:
+    category_filter = args[0].strip().lower() if args else ""
+    sources = _load_source_pack()
+    if category_filter:
+        sources = [
+            source
+            for source in sources
+            if str(source.get("category", "")).strip().lower() == category_filter
+        ]
+
+    if not sources:
+        if category_filter:
+            return f"No source-pack feeds found for category '{category_filter}'."
+        return "No source-pack feeds are available."
+
+    categories = Counter(str(source.get("category", "unknown")) for source in sources)
+    lines = [
+        f"Checkable source pack feeds: {len(sources)}",
+        _format_counter(categories, "categories"),
+    ]
+    for index, source in enumerate(sources, start=1):
+        lines.append(
+            f"- {index}. {source['name']} [{source['category']}] "
+            f"trust={source.get('trust_score', 0)}"
+        )
+        lines.append(f"  {source['feed_url']}")
+    lines.append("Use /sourcepack <category> to filter.")
+    lines.append("Use /addsource rss <feed-url>, then /sourcetest <source-id> to check one.")
+    return "\n".join(lines)
+
+
+def _load_source_pack() -> list[dict[str, object]]:
+    try:
+        payload = json.loads(SOURCE_PACK_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [
+        source
+        for source in payload
+        if isinstance(source, dict)
+        and isinstance(source.get("name"), str)
+        and isinstance(source.get("feed_url"), str)
+        and isinstance(source.get("category"), str)
+    ]
 
 
 def _parse_source_id(value: str) -> int | None:

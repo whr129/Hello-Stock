@@ -6,28 +6,40 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from news_agent.agent.guardrails import enforce_financial_guardrails
 from news_agent.agent.intent import IntentClassifier
+from news_agent.agent.reflection import ReflectionService
 from news_agent.agent.router import help_response, route_request
 from news_agent.app.state import SupervisorState
-from news_agent.domains.market.subagent import MarketSubagent
 from news_agent.domains.news.subagent import NewsSubagent
 from news_agent.domains.runtime.subagent import RuntimeSubagent
-from news_agent.markets.yahoo import YahooMarketDataProvider
+from news_agent.memory.consolidation import MemoryConsolidationService
 from news_agent.memory.embeddings import EmbeddingService
-from news_agent.memory.long_term import memory_from_user_text, should_store_memory
-from news_agent.memory.short_term import append_message, expiry
-from news_agent.observability.runtime import RuntimeAlertService, RuntimeTraceService, summarize_run_state
+from news_agent.memory.short_term import (
+    append_message,
+    deserialize_state,
+    expiry,
+    serialize_state,
+)
+from news_agent.observability.runtime import (
+    RuntimeAlertService,
+    RuntimeTraceService,
+    summarize_run_state,
+)
+from news_agent.research.agents import ResearchSubagent
 from news_agent.search.service import GeneralSearchService
 from news_agent.settings import Settings
 from news_agent.storage.repositories import (
-    EmbeddingRepository,
+    ConversationEventRepository,
     MemoryRepository,
-    PreferenceRepository,
     ShortTermSessionRepository,
-    TickerRepository,
     UserRepository,
 )
 
 logger = logging.getLogger(__name__)
+
+REFLECTION_EXHAUSTED_NOTE = (
+    "Note: I could not confidently repair this answer after a reflection retry. "
+    "You may want to rephrase or use a direct command such as /research, /candidates, or /runtime."
+)
 
 
 def _next_step(state: SupervisorState) -> str:
@@ -40,7 +52,9 @@ def _next_step(state: SupervisorState) -> str:
         return "run_news_agent"
     if pending[0] == "runtime":
         return "run_runtime_agent"
-    return "run_market_agent"
+    if pending[0] == "research":
+        return "run_research_agent"
+    return "merge_agent_outputs"
 
 
 def _should_run_search(state: SupervisorState) -> bool:
@@ -52,8 +66,13 @@ def _should_run_search(state: SupervisorState) -> bool:
         return True
 
     news_meta = state.get("news_result", {}).get("metadata", {})
-    market_meta = state.get("market_result", {}).get("metadata", {})
-    return bool(news_meta.get("needs_search_fallback") or market_meta.get("needs_search_fallback"))
+    return bool(news_meta.get("needs_search_fallback"))
+
+
+def _after_reflection(state: SupervisorState) -> str:
+    if state.get("metadata", {}).get("reflection_retry"):
+        return "route_request"
+    return "persist_session"
 
 
 class SupervisorNodes:
@@ -62,35 +81,43 @@ class SupervisorNodes:
         self.settings = settings
         self.intent_classifier = IntentClassifier(settings)
         self.news_agent = NewsSubagent(session_factory, settings)
-        self.market_agent = MarketSubagent(session_factory, settings, YahooMarketDataProvider())
         self.runtime_agent = RuntimeSubagent(session_factory, settings)
+        self.research_agent = ResearchSubagent(session_factory, settings)
         self.search_service = GeneralSearchService(settings)
+        self.reflection_service = ReflectionService(settings)
         self.embedding_service = EmbeddingService(settings)
+        self.memory_service = MemoryConsolidationService(session_factory, settings)
         self.trace_service = RuntimeTraceService(session_factory, settings)
         self.alert_service = RuntimeAlertService(session_factory, settings)
 
     async def load_user_context(self, state: SupervisorState) -> SupervisorState:
+        query_embedding = await self.embedding_service.embed_text(state.get("message_text", ""))
         async with self.session_factory() as session:
             user = await UserRepository(session, self.settings).get_or_create_user(
                 state["telegram_user_id"]
             )
-            preference = await PreferenceRepository(session).get_for_user(user.id)
-            tickers = await TickerRepository(session).list_for_user(user.id)
-            short_term_state = await ShortTermSessionRepository(session).get_state(state["chat_id"])
-            memories = await MemoryRepository(session).list_for_user(user.id)
+            stored_state = await ShortTermSessionRepository(session).get_state(state["chat_id"])
+            short_term_state = deserialize_state(stored_state)
+            memories = await MemoryRepository(session).semantic_search_for_user(
+                user_id=user.id,
+                query_embedding=query_embedding,
+                limit=self.settings.long_term_memory_top_k,
+            )
+            if not memories:
+                memories = await MemoryRepository(session).list_for_user(user.id)
             await session.commit()
 
         return {
             **state,
             "errors": list(state.get("errors", [])),
             "metadata": dict(state.get("metadata", {})),
+            "messages": list(short_term_state.get("messages", [])),
             "user_context": {
                 "user_id": user.id,
-                "local_region": user.local_region,
-                "timezone": user.timezone,
-                "topics": preference.topics,
-                "watched_tickers": tickers,
-                "short_term_memory": short_term_state,
+                "short_term_memory": serialize_state(
+                    short_term_state,
+                    max_messages=self.settings.short_term_memory_window_size,
+                ),
                 "long_term_memory": [memory.memory_text for memory in memories],
             },
         }
@@ -144,17 +171,6 @@ class SupervisorNodes:
             "completed_agents": completed,
         }
 
-    async def run_market_agent(self, state: SupervisorState) -> SupervisorState:
-        result = await self.market_agent.run(state)
-        pending = [agent for agent in state.get("pending_agents", []) if agent != "market"]
-        completed = list(state.get("completed_agents", [])) + ["market"]
-        return {
-            **state,
-            "market_result": result,
-            "pending_agents": pending,
-            "completed_agents": completed,
-        }
-
     async def run_runtime_agent(self, state: SupervisorState) -> SupervisorState:
         result = await self.runtime_agent.run(state)
         pending = [agent for agent in state.get("pending_agents", []) if agent != "runtime"]
@@ -162,6 +178,17 @@ class SupervisorNodes:
         return {
             **state,
             "runtime_result": result,
+            "pending_agents": pending,
+            "completed_agents": completed,
+        }
+
+    async def run_research_agent(self, state: SupervisorState) -> SupervisorState:
+        result = await self.research_agent.run(state)
+        pending = [agent for agent in state.get("pending_agents", []) if agent != "research"]
+        completed = list(state.get("completed_agents", [])) + ["research"]
+        return {
+            **state,
+            "research_result": result,
             "pending_agents": pending,
             "completed_agents": completed,
         }
@@ -179,7 +206,10 @@ class SupervisorNodes:
                     **result.metadata,
                     "capability": "general_search",
                     "query": result.query,
-                    "sources": [{"title": source.title, "url": source.url} for source in result.sources],
+                    "sources": [
+                        {"title": source.title, "url": source.url}
+                        for source in result.sources
+                    ],
                 },
             },
         }
@@ -192,34 +222,24 @@ class SupervisorNodes:
         else:
             parts: list[str] = []
             news_response = state.get("news_result", {}).get("response")
-            market_response = state.get("market_result", {}).get("response")
             runtime_response = state.get("runtime_result", {}).get("response")
+            research_response = state.get("research_result", {}).get("response")
             search_response = state.get("search_result", {}).get("response")
             news_meta = state.get("news_result", {}).get("metadata", {})
-            market_meta = state.get("market_result", {}).get("metadata", {})
             general_only = "general_search" in set(route.get("capabilities", []))
             if news_response:
                 parts.append(news_response)
-            if market_response:
-                parts.append(market_response)
             if runtime_response:
                 parts.append(runtime_response)
+            if research_response:
+                parts.append(research_response)
             if search_response:
                 if general_only:
                     parts = [search_response]
-                elif news_meta.get("needs_search_fallback") and market_meta.get("needs_search_fallback"):
-                    parts.append(
-                        "Fresh stored news and market snapshot data were unavailable, so this answer uses web search."
-                    )
-                    parts.append(search_response)
                 elif news_meta.get("needs_search_fallback"):
                     parts.append(
-                        "Fresh stored news data were unavailable, so the following answer uses web search."
-                    )
-                    parts.append(search_response)
-                elif market_meta.get("needs_search_fallback"):
-                    parts.append(
-                        "Fresh market data were unavailable, so the following answer uses web search context."
+                        "Fresh stored news data were unavailable, "
+                        "so the following answer uses web search."
                     )
                     parts.append(search_response)
             response = "\n\n".join(parts) if parts else help_response()
@@ -229,46 +249,153 @@ class SupervisorNodes:
     async def guardrail_check(self, state: SupervisorState) -> SupervisorState:
         response = state.get("final_response", "")
         capabilities = set(state.get("route", {}).get("capabilities", []))
-        if state.get("market_result", {}).get("response") or (
-            state.get("search_result", {}).get("response")
-            and {"market_snapshot", "technical_analysis"} & capabilities
-        ):
+        if state.get("research_result", {}).get("response"):
+            response = enforce_financial_guardrails(response)
+        elif state.get("search_result", {}).get("response") and "general_search" in capabilities:
             response = enforce_financial_guardrails(response)
         return {**state, "final_response": response, "response": response}
+
+    async def reflect_result(self, state: SupervisorState) -> SupervisorState:
+        metadata = dict(state.get("metadata", {}))
+        metadata.pop("reflection_retry", None)
+        reflection_notes = list(state.get("reflection_notes", []))
+        attempts = int(state.get("reflection_attempts", 0) or 0)
+
+        if not self.settings.answer_reflection_enabled:
+            return {
+                **state,
+                "metadata": {**metadata, "reflection_status": "disabled"},
+                "reflection_attempts": attempts,
+                "reflection_notes": reflection_notes,
+            }
+
+        decision = await self.reflection_service.reflect(state)
+        decision_payload = {
+            "verdict": decision.verdict,
+            "reason": decision.reason,
+            "corrected_intent": decision.corrected_intent,
+            "corrected_args": decision.corrected_args or [],
+            "status": decision.status,
+            "attempt": attempts,
+        }
+        metadata["reflection_decision"] = decision_payload
+        metadata["reflection_status"] = decision.status
+
+        if decision.verdict == "pass":
+            return {
+                **state,
+                "metadata": metadata,
+                "reflection_attempts": attempts,
+                "reflection_decision": decision_payload,
+                "reflection_notes": reflection_notes,
+            }
+
+        if (
+            decision.verdict == "retry"
+            and decision.corrected_intent
+            and attempts < self.settings.answer_reflection_max_retries
+        ):
+            corrected_args = decision.corrected_args or []
+            metadata["reflection_retry"] = True
+            metadata.setdefault("reflection_history", []).append(decision_payload)
+            requested_symbols = [
+                item.upper() for item in corrected_args if item.isalpha() and 1 <= len(item) <= 5
+            ]
+            return {
+                **state,
+                "command": "",
+                "intent": decision.corrected_intent,
+                "args": corrected_args,
+                "requested_symbols": requested_symbols,
+                "route": {},
+                "pending_agents": [],
+                "completed_agents": [],
+                "news_result": {},
+                "runtime_result": {},
+                "research_result": {},
+                "search_result": {},
+                "final_response": "",
+                "response": "",
+                "metadata": metadata,
+                "reflection_attempts": attempts + 1,
+                "reflection_decision": decision_payload,
+                "reflection_notes": reflection_notes + [decision.reason],
+                "reflection_exhausted": False,
+            }
+
+        response = state.get("final_response", "")
+        if REFLECTION_EXHAUSTED_NOTE not in response:
+            response = f"{response}\n\n{REFLECTION_EXHAUSTED_NOTE}".strip()
+        metadata["reflection_exhausted"] = True
+        metadata.setdefault("reflection_history", []).append(decision_payload)
+        return {
+            **state,
+            "final_response": response,
+            "response": response,
+            "metadata": metadata,
+            "reflection_attempts": attempts,
+            "reflection_decision": decision_payload,
+            "reflection_notes": reflection_notes + [decision.reason],
+            "reflection_exhausted": True,
+        }
 
     async def persist_session(self, state: SupervisorState) -> SupervisorState:
         text = state.get("message_text", "")
         response = state.get("final_response", "")
-        short_term_state = dict(state.get("user_context", {}).get("short_term_memory", {}))
-        append_message(short_term_state, "user", text)
+        short_term_state = {"messages": list(state.get("messages", []))}
+        append_message(
+            short_term_state,
+            "user",
+            text,
+            max_messages=self.settings.short_term_memory_window_size,
+        )
         if response:
-            append_message(short_term_state, "assistant", response)
+            append_message(
+                short_term_state,
+                "assistant",
+                response,
+                max_messages=self.settings.short_term_memory_window_size,
+            )
 
         async with self.session_factory() as session:
             await ShortTermSessionRepository(session).save_state(
                 state["chat_id"],
-                short_term_state,
-                expiry(),
+                serialize_state(
+                    short_term_state,
+                    max_messages=self.settings.short_term_memory_window_size,
+                ),
+                expiry(self.settings.short_term_memory_expiry_minutes),
             )
+            event_repo = ConversationEventRepository(session)
+            await event_repo.create(
+                user_id=state["user_context"]["user_id"],
+                chat_id=state["chat_id"],
+                role="user",
+                content=text,
+                metadata={"intent": state.get("intent", ""), "command": state.get("command", "")},
+            )
+            if response:
+                await event_repo.create(
+                    user_id=state["user_context"]["user_id"],
+                    chat_id=state["chat_id"],
+                    role="assistant",
+                    content=response,
+                    metadata={"capabilities": state.get("route", {}).get("capabilities", [])},
+                )
             await session.commit()
 
-        if should_store_memory(text):
-            async with self.session_factory() as session:
-                memory = await MemoryRepository(session).remember(
-                    user_id=state["user_context"]["user_id"],
-                    text=memory_from_user_text(text),
-                )
-                embedding = await self.embedding_service.embed_text(memory.memory_text)
-                await EmbeddingRepository(session).save_memory_embedding(
-                    memory.id,
-                    embedding,
-                    self.settings.embedding_model,
-                )
-                await session.commit()
+        await self.memory_service.enqueue_if_due(user_id=state["user_context"]["user_id"])
 
         user_context = dict(state.get("user_context", {}))
-        user_context["short_term_memory"] = short_term_state
-        return {**state, "user_context": user_context}
+        user_context["short_term_memory"] = serialize_state(
+            short_term_state,
+            max_messages=self.settings.short_term_memory_window_size,
+        )
+        return {
+            **state,
+            "messages": list(short_term_state.get("messages", [])),
+            "user_context": user_context,
+        }
 
     def traced(
         self,
@@ -301,7 +428,11 @@ class SupervisorNodes:
                 result = await func(state)
             except Exception as exc:
                 message = str(exc)
-                await self.trace_service.finish_step(step_id, status="failed", error_message=message)
+                await self.trace_service.finish_step(
+                    step_id,
+                    status="failed",
+                    error_message=message,
+                )
                 error_id = await self.trace_service.record_error(
                     run_id=run_id,
                     workflow="chat",
@@ -331,7 +462,11 @@ class SupervisorNodes:
                 metadata=_step_metadata(result),
             )
             if finalize_run:
-                status = "completed_with_errors" if result.get("errors") else "completed"
+                status = (
+                    "completed_with_errors"
+                    if result.get("errors") or result.get("reflection_exhausted")
+                    else "completed"
+                )
                 await self.trace_service.finish_run(
                     run_id,
                     status=status,
@@ -365,17 +500,57 @@ class SupervisorNodes:
 def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settings):
     nodes = SupervisorNodes(session_factory, settings)
     graph = StateGraph(SupervisorState)
+    research_handler = getattr(nodes, "run_research_agent", None)
+
+    async def fallback_research_agent(state: SupervisorState) -> SupervisorState:
+        pending = [agent for agent in state.get("pending_agents", []) if agent != "research"]
+        completed = list(state.get("completed_agents", [])) + ["research"]
+        return {
+            **state,
+            "research_result": {
+                "response": "Market research is unavailable in this graph configuration.",
+                "metadata": {"capability": "market_research", "status": "unavailable"},
+            },
+            "pending_agents": pending,
+            "completed_agents": completed,
+        }
 
     graph.add_node("load_user_context", nodes.traced("load_user_context", nodes.load_user_context))
     graph.add_node("classify_request", nodes.traced("classify_request", nodes.classify_request))
     graph.add_node("route_request", nodes.traced("route_request", nodes.route_request))
-    graph.add_node("run_news_agent", nodes.traced("run_news_agent", nodes.run_news_agent, step_type="subagent"))
-    graph.add_node("run_market_agent", nodes.traced("run_market_agent", nodes.run_market_agent, step_type="subagent"))
-    graph.add_node("run_runtime_agent", nodes.traced("run_runtime_agent", nodes.run_runtime_agent, step_type="subagent"))
-    graph.add_node("run_general_search", nodes.traced("run_general_search", nodes.run_general_search, step_type="tool"))
-    graph.add_node("merge_agent_outputs", nodes.traced("merge_agent_outputs", nodes.merge_agent_outputs))
+    graph.add_node(
+        "run_news_agent",
+        nodes.traced("run_news_agent", nodes.run_news_agent, step_type="subagent"),
+    )
+    graph.add_node(
+        "run_runtime_agent",
+        nodes.traced("run_runtime_agent", nodes.run_runtime_agent, step_type="subagent"),
+    )
+    graph.add_node(
+        "run_research_agent",
+        nodes.traced(
+            "run_research_agent",
+            research_handler or fallback_research_agent,
+            step_type="subagent",
+        ),
+    )
+    graph.add_node(
+        "run_general_search",
+        nodes.traced("run_general_search", nodes.run_general_search, step_type="tool"),
+    )
+    graph.add_node(
+        "merge_agent_outputs",
+        nodes.traced("merge_agent_outputs", nodes.merge_agent_outputs),
+    )
     graph.add_node("guardrail_check", nodes.traced("guardrail_check", nodes.guardrail_check))
-    graph.add_node("persist_session", nodes.traced("persist_session", nodes.persist_session, finalize_run=True))
+    graph.add_node(
+        "reflect_result",
+        nodes.traced("reflect_result", nodes.reflect_result, step_type="tool"),
+    )
+    graph.add_node(
+        "persist_session",
+        nodes.traced("persist_session", nodes.persist_session, finalize_run=True),
+    )
 
     graph.set_entry_point("load_user_context")
     graph.add_edge("load_user_context", "classify_request")
@@ -385,8 +560,8 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         _next_step,
         {
             "run_news_agent": "run_news_agent",
-            "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
+            "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",
             "merge_agent_outputs": "merge_agent_outputs",
         },
@@ -396,19 +571,19 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         _next_step,
         {
             "run_news_agent": "run_news_agent",
-            "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
+            "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",
             "merge_agent_outputs": "merge_agent_outputs",
         },
     )
     graph.add_conditional_edges(
-        "run_market_agent",
+        "run_research_agent",
         _next_step,
         {
             "run_news_agent": "run_news_agent",
-            "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
+            "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",
             "merge_agent_outputs": "merge_agent_outputs",
         },
@@ -418,15 +593,23 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         _next_step,
         {
             "run_news_agent": "run_news_agent",
-            "run_market_agent": "run_market_agent",
             "run_runtime_agent": "run_runtime_agent",
+            "run_research_agent": "run_research_agent",
             "run_general_search": "run_general_search",
             "merge_agent_outputs": "merge_agent_outputs",
         },
     )
     graph.add_edge("run_general_search", "merge_agent_outputs")
     graph.add_edge("merge_agent_outputs", "guardrail_check")
-    graph.add_edge("guardrail_check", "persist_session")
+    graph.add_edge("guardrail_check", "reflect_result")
+    graph.add_conditional_edges(
+        "reflect_result",
+        _after_reflection,
+        {
+            "route_request": "route_request",
+            "persist_session": "persist_session",
+        },
+    )
     graph.add_edge("persist_session", END)
     return graph.compile()
 
@@ -460,4 +643,7 @@ def _step_metadata(state: SupervisorState) -> dict[str, object]:
         "pending_agents": list(state.get("pending_agents", [])),
         "completed_agents": list(state.get("completed_agents", [])),
         "route_capabilities": list(state.get("route", {}).get("capabilities", [])),
+        "reflection_attempts": int(state.get("reflection_attempts", 0) or 0),
+        "reflection_decision": dict(state.get("reflection_decision", {})),
+        "reflection_exhausted": bool(state.get("reflection_exhausted", False)),
     }

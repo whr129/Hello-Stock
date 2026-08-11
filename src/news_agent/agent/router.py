@@ -4,31 +4,29 @@ from dataclasses import dataclass
 from news_agent.app.state import Capability, Intent
 
 COMMAND_INTENTS: dict[str, Intent] = {
-    "/brief": "brief",
-    "/stocks": "stocks",
-    "/watch": "watch",
-    "/unwatch": "unwatch",
-    "/topics": "topics",
-    "/local": "local",
     "/sources": "sources",
     "/addsource": "addsource",
     "/removesource": "removesource",
     "/sourceconfig": "sourceconfig",
     "/sourcefields": "sourcefields",
     "/sourcetest": "sourcetest",
+    "/sourcepack": "sourcepack",
     "/refresh": "refresh",
     "/memory": "memory",
     "/forget": "forget",
     "/resetmemory": "resetmemory",
-    "/timezone": "timezone",
-    "/recaptime": "recaptime",
-    "/recapoff": "recapoff",
-    "/recapstatus": "recapstatus",
+    "/resources": "resources",
     "/runtime": "runtime",
     "/job": "job",
+    "/refreshreport": "refreshreport",
     "/trace": "trace",
     "/step": "step",
     "/alerts": "alerts",
+    "/research": "research",
+    "/candidates": "candidates",
+    "/signals": "signals",
+    "/researchstatus": "researchstatus",
+    "/sourcehealth": "sourcehealth",
     "/skills": "skills",
     "/help": "help",
     "/start": "help",
@@ -49,56 +47,31 @@ class RouteDecision:
 
 def help_response() -> str:
     return (
-        "I can help with personalized news, market analysis, and general web lookups. "
+        "I can help with market-impact research, source management, "
+        "runtime inspection, memory, and general web lookups. "
         "Try /skills for the full command list, or ask a general question directly."
     )
 
 
 def skills_response() -> str:
     return (
-        "Available skills and commands:\n"
+        "Commands:\n"
         "\n"
-        "News briefings\n"
-        "- /brief\n"
-        "- /topics <topic...>\n"
-        "- /local <region>\n"
+        "Research: /research, /candidates, /signals <ticker>, /researchstatus, /sourcehealth\n"
         "\n"
-        "Market data and technical analysis\n"
-        "- /stocks <ticker...>\n"
-        "- /watch <ticker...>\n"
-        "- /unwatch <ticker...>\n"
+        "Sources: /sources, /addsource <provider> <target>, /sourceconfig <id> <key> <value>, "
+        "/sourcefields <id> <field> <value>, /sourcetest <id>, /removesource <id>\n"
+        "Source packs: /sourcepack [category]\n"
         "\n"
-        "Source management\n"
-        "- /sources\n"
-        "- /addsource <provider> <target>\n"
-        "- /sourceconfig <source-id> <key> <value>\n"
-        "- /sourcefields <source-id> <field> <mapped-value>\n"
-        "- /sourcetest <source-id>\n"
-        "- /removesource <source-id>\n"
+        "Pipelines: /refresh [market_prices|breaking_resources|daily_resources|all]\n"
+        "Aliases: /refresh prices, /refresh breaking, /refresh daily\n"
         "\n"
-        "Refresh and recap\n"
-        "- /refresh\n"
-        "- /timezone <Area/City>\n"
-        "- /recaptime <HH:MM>\n"
-        "- /recapoff\n"
-        "- /recapstatus\n"
+        "Runtime: /runtime, /job <run-id>, /refreshreport [run-id], "
+        "/trace <run-id>, /step <run-id> <step-name>, /alerts\n"
         "\n"
-        "Runtime debugging\n"
-        "- /runtime\n"
-        "- /job <run-id>\n"
-        "- /trace <run-id>\n"
-        "- /step <run-id> <step-name>\n"
-        "- /alerts\n"
+        "Memory: /memory, /forget <memory-id>, /resetmemory, /resources\n"
         "\n"
-        "Memory and assistant info\n"
-        "- /memory\n"
-        "- /forget <memory-id>\n"
-        "- /resetmemory\n"
-        "- /help\n"
-        "- /skills\n"
-        "\n"
-        "General web questions\n"
-        "- Ask a question directly, for example: who won the world series last year?"
+        "Help: /help, /skills"
     )
 
 
@@ -123,40 +96,22 @@ def route_request(
 ) -> RouteDecision:
     del command
     args = args or []
-    has_symbol_args = any(_looks_like_ticker(item) for item in args)
-
-    if intent == "brief":
-        if has_symbol_args:
-            return RouteDecision(
-                agents=("news", "market"),
-                capabilities=("news_brief", "market_snapshot", "technical_analysis"),
-            )
-        return RouteDecision(agents=("news",), capabilities=("news_brief",))
-    if intent == "stocks":
-        return RouteDecision(
-            agents=("market",),
-            capabilities=("market_snapshot", "technical_analysis"),
-        )
-    if intent in {"watch", "unwatch"}:
-        return RouteDecision(agents=("market",), capabilities=("watchlist_admin",))
-    if intent == "topics":
-        return RouteDecision(agents=("news",), capabilities=("topic_preferences",))
-    if intent == "local":
-        return RouteDecision(agents=("news",), capabilities=("local_preferences",))
     if intent in {"sources", "addsource", "removesource"}:
         return RouteDecision(agents=("news",), capabilities=("source_admin",))
-    if intent in {"sourceconfig", "sourcefields", "sourcetest"}:
+    if intent in {"sourceconfig", "sourcefields", "sourcetest", "sourcepack"}:
         return RouteDecision(agents=("news",), capabilities=("source_admin",))
     if intent == "refresh":
         return RouteDecision(agents=("news",), capabilities=("scheduler_admin",))
     if intent in {"memory", "forget", "resetmemory"}:
         return RouteDecision(agents=("news",), capabilities=("memory_admin",))
-    if intent in {"timezone", "recaptime", "recapoff", "recapstatus"}:
-        return RouteDecision(agents=("news",), capabilities=("recap_admin",))
-    if intent in {"runtime", "job", "trace", "step"}:
+    if intent == "resources":
+        return RouteDecision(agents=("news",), capabilities=("resource_inventory",))
+    if intent in {"runtime", "job", "refreshreport", "trace", "step"}:
         return RouteDecision(agents=("runtime",), capabilities=("runtime_inspection",))
     if intent == "alerts":
         return RouteDecision(agents=("runtime",), capabilities=("runtime_alerts",))
+    if intent in {"research", "candidates", "signals", "researchstatus", "sourcehealth"}:
+        return RouteDecision(agents=("research",), capabilities=("market_research",))
     if intent == "skills":
         return RouteDecision(agents=("news",), capabilities=("skills",))
     if intent == "help":
@@ -206,6 +161,7 @@ def _looks_like_runtime_query(message_text: str) -> bool:
         phrase in lowered
         for phrase in (
             "last refresh",
+            "refresh report",
             "during refresh",
             "calling history",
             "call history",

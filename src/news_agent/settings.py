@@ -3,9 +3,46 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG: str = (
+    '{"AI":["ai","artificial intelligence","generative ai","foundation model",'
+    '"large language model","llm"],'
+    '"AI infrastructure":["ai infrastructure","gpu","accelerator","data center",'
+    '"datacenter","ai server","inference","training cluster"],'
+    '"semiconductors":["semiconductor","semiconductors","chip","chips","foundry",'
+    '"wafer","fab","advanced packaging"],'
+    '"memory chips":["hbm","dram","nand","memory chip","memory demand"],'
+    '"cloud capex":["cloud capex","capital expenditure","hyperscaler","cloud spending"],'
+    '"rates":["fed","treasury yield","rate cut","rate hike","inflation","cpi"],'
+    '"regional banks":["regional bank","deposit","commercial real estate"],'
+    '"energy supply":["oil","natural gas","opec","lng","energy supply"],'
+    '"obesity drugs":["glp-1","obesity","weight loss drug"],'
+    '"defense spending":["defense","missile","military contract","geopolitical"]}'
+)
+DEFAULT_MARKET_ENTITY_ALIASES_JSON: str = (
+    '{"NVDA":["nvidia","nvidia corp","nvidia corporation"],'
+    '"AMD":["amd","advanced micro devices"],'
+    '"MU":["micron","micron technology"],'
+    '"MSFT":["microsoft"],'
+    '"GOOGL":["google","alphabet"],'
+    '"AMZN":["amazon","amazon.com"],'
+    '"META":["meta","facebook","meta platforms"],'
+    '"AVGO":["broadcom"],'
+    '"TSM":["tsmc","taiwan semiconductor"],'
+    '"AAPL":["apple"],'
+    '"ORCL":["oracle"],'
+    '"PLTR":["palantir"],'
+    '"LLY":["eli lilly"],'
+    '"TSLA":["tesla"]}'
+)
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     database_url: str = Field(
@@ -16,9 +53,34 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
     general_search_model: str = Field(default="", alias="GENERAL_SEARCH_MODEL")
     general_search_max_sources: int = Field(default=5, alias="GENERAL_SEARCH_MAX_SOURCES")
-    general_search_timeout_seconds: int = Field(
-        default=30, alias="GENERAL_SEARCH_TIMEOUT_SECONDS"
+    general_search_timeout_seconds: int = Field(default=30, alias="GENERAL_SEARCH_TIMEOUT_SECONDS")
+    research_web_enabled: bool = Field(default=False, alias="RESEARCH_WEB_ENABLED")
+    research_web_model: str = Field(default="", alias="RESEARCH_WEB_MODEL")
+    research_web_max_companies: int = Field(default=3, alias="RESEARCH_WEB_MAX_COMPANIES")
+    research_web_concurrency: int = Field(default=3, alias="RESEARCH_WEB_CONCURRENCY")
+    research_web_max_queries_per_company: int = Field(
+        default=3,
+        alias="RESEARCH_WEB_MAX_QUERIES_PER_COMPANY",
     )
+    research_web_max_sources_per_company: int = Field(
+        default=6,
+        alias="RESEARCH_WEB_MAX_SOURCES_PER_COMPANY",
+    )
+    research_web_company_timeout_seconds: int = Field(
+        default=25,
+        alias="RESEARCH_WEB_COMPANY_TIMEOUT_SECONDS",
+    )
+    research_web_total_timeout_seconds: int = Field(
+        default=60,
+        alias="RESEARCH_WEB_TOTAL_TIMEOUT_SECONDS",
+    )
+    research_web_max_retries: int = Field(default=1, alias="RESEARCH_WEB_MAX_RETRIES")
+    research_web_news_lookback_days: int = Field(
+        default=7,
+        alias="RESEARCH_WEB_NEWS_LOOKBACK_DAYS",
+    )
+    answer_reflection_enabled: bool = Field(default=True, alias="ANSWER_REFLECTION_ENABLED")
+    answer_reflection_max_retries: int = Field(default=1, alias="ANSWER_REFLECTION_MAX_RETRIES")
     runtime_alert_telegram_chat_id: int = Field(default=0, alias="RUNTIME_ALERT_TELEGRAM_CHAT_ID")
     runtime_retention_days: int = Field(default=30, alias="RUNTIME_RETENTION_DAYS")
     embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
@@ -29,14 +91,194 @@ class Settings(BaseSettings):
     rss_fetch_timeout_seconds: int = Field(default=15, alias="RSS_FETCH_TIMEOUT_SECONDS")
     market_fetch_timeout_seconds: int = Field(default=20, alias="MARKET_FETCH_TIMEOUT_SECONDS")
     llm_timeout_seconds: int = Field(default=30, alias="LLM_TIMEOUT_SECONDS")
-    default_local_region: str = Field(default="Waterloo", alias="DEFAULT_LOCAL_REGION")
+    financial_advice_terms: str = Field(
+        default="you should buy,you should sell,guaranteed,risk-free,sure profit",
+        alias="FINANCIAL_ADVICE_TERMS",
+    )
+    financial_guardrail_disclaimer: str = Field(
+        default="This is informational only, not financial advice.",
+        alias="FINANCIAL_GUARDRAIL_DISCLAIMER",
+    )
+    market_impact_allowed_categories: str = Field(
+        default="tech,macro,policy,regulatory,earnings,filings,finance,markets",
+        alias="MARKET_IMPACT_ALLOWED_CATEGORIES",
+    )
+    market_impact_keywords: str = Field(
+        default=(
+            "AI,semiconductor,semiconductors,rates,CPI,tariff,tariffs,sanction,sanctions,"
+            "earnings,M&A,guidance,capex,"
+            "regulation,acquisition,merger,antitrust,bank,bond,company,economy,"
+            "export control,fed,filing,forecast,inflation,IPO,market,nasdaq,profit,"
+            "revenue,sales,shares,stock,treasury"
+        ),
+        alias="MARKET_IMPACT_KEYWORDS",
+    )
+    market_impact_reject_terms: str = Field(
+        default=(
+            "box office,celebrity,concert,credit card points,fashion,inherited a house,"
+            "inherited house,money moves,movie review,personal finance,recipe,restaurant,"
+            "sports,tournament,travel tips,tv show,weather forecast"
+        ),
+        alias="MARKET_IMPACT_REJECT_TERMS",
+    )
+    market_impact_minimum_confidence: float = Field(
+        default=0.8,
+        alias="MARKET_IMPACT_MINIMUM_CONFIDENCE",
+    )
+    llm_market_impact_classification_enabled: bool = Field(
+        default=False,
+        alias="LLM_MARKET_IMPACT_CLASSIFICATION_ENABLED",
+    )
+    llm_market_impact_classification_threshold: float = Field(
+        default=0.8,
+        alias="LLM_MARKET_IMPACT_CLASSIFICATION_THRESHOLD",
+    )
     scheduler_tick_seconds: int = Field(default=60, alias="SCHEDULER_TICK_SECONDS")
+    market_price_pipeline_interval_seconds: int = Field(
+        default=600,
+        alias="MARKET_PRICE_PIPELINE_INTERVAL_SECONDS",
+    )
+    breaking_resources_pipeline_interval_seconds: int = Field(
+        default=1800,
+        alias="BREAKING_RESOURCES_PIPELINE_INTERVAL_SECONDS",
+    )
+    daily_resources_pipeline_interval_seconds: int = Field(
+        default=86400,
+        alias="DAILY_RESOURCES_PIPELINE_INTERVAL_SECONDS",
+    )
     news_freshness_hours: int = Field(default=24, alias="NEWS_FRESHNESS_HOURS")
     summary_freshness_hours: int = Field(default=24, alias="SUMMARY_FRESHNESS_HOURS")
     snapshot_freshness_minutes: int = Field(default=15, alias="SNAPSHOT_FRESHNESS_MINUTES")
     article_retention_days: int = Field(default=30, alias="ARTICLE_RETENTION_DAYS")
-    snapshot_retention_days: int = Field(default=7, alias="SNAPSHOT_RETENTION_DAYS")
+    snapshot_retention_days: int = Field(default=30, alias="SNAPSHOT_RETENTION_DAYS")
+    market_universe_symbols: str = Field(
+        default=(
+            "NVDA,MSFT,AAPL,GOOGL,AMZN,META,AVGO,AMD,MU,TSM,LRCX,KLAC,ORCL,PLTR,"
+            "JPM,BAC,GS,MS,V,MA,BRK-B,"
+            "LLY,UNH,JNJ,MRK,ABBV,ISRG,TMO,"
+            "TSLA,HD,WMT,COST,MCD,NKE,DIS,NFLX,"
+            "XOM,CVX,SLB,GE,CAT,DE,RTX,LMT,NEM,LIN,"
+            "NEE,SO,TMUS,AMT"
+        ),
+        alias="MARKET_UNIVERSE_SYMBOLS",
+    )
+    market_universe_areas_json: str = Field(
+        default=(
+            '{"AI, Cloud, Semis, Software":["NVDA","MSFT","AAPL","GOOGL","AMZN","META",'
+            '"AVGO","AMD","MU","TSM","LRCX","KLAC","ORCL","PLTR"],'
+            '"Financials and Payments":["JPM","BAC","GS","MS","V","MA","BRK-B"],'
+            '"Healthcare and Life Sciences":["LLY","UNH","JNJ","MRK","ABBV","ISRG","TMO"],'
+            '"Consumer and Media":["TSLA","HD","WMT","COST","MCD","NKE","DIS","NFLX"],'
+            '"Energy, Industrials, Materials, Defense":["XOM","CVX","SLB","GE","CAT","DE",'
+            '"RTX","LMT","NEM","LIN"],'
+            '"Utilities, Telecom, Real Estate Infrastructure":["NEE","SO","TMUS","AMT"]}'
+        ),
+        alias="MARKET_UNIVERSE_AREAS_JSON",
+    )
+    market_research_sector_config: str = Field(
+        default=DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG,
+        alias="MARKET_RESEARCH_SECTOR_CONFIG",
+    )
+    market_research_theme_config: str = Field(default="", alias="MARKET_RESEARCH_THEME_CONFIG")
+    market_research_blocked_tickers: str = Field(
+        default="AI,CEO,CFO,CPA,ETF,GDP,HBM,IPO,LLC,SEC,THIS,USA",
+        alias="MARKET_RESEARCH_BLOCKED_TICKERS",
+    )
+    market_research_allowed_single_letter_tickers: str = Field(
+        default="",
+        alias="MARKET_RESEARCH_ALLOWED_SINGLE_LETTER_TICKERS",
+    )
+    market_research_non_entity_terms: str = Field(
+        default="this,that,there,here,said,will,with,from,into,over,under",
+        alias="MARKET_RESEARCH_NON_ENTITY_TERMS",
+    )
+    market_entity_aliases_json: str = Field(
+        default=DEFAULT_MARKET_ENTITY_ALIASES_JSON,
+        alias="MARKET_ENTITY_ALIASES_JSON",
+    )
+    source_default_fetch_interval_seconds: int = Field(
+        default=900,
+        alias="SOURCE_DEFAULT_FETCH_INTERVAL_SECONDS",
+    )
+    default_sources_json: str = Field(default="", alias="DEFAULT_SOURCES_JSON")
+    default_source_pack_enabled: bool = Field(default=True, alias="DEFAULT_SOURCE_PACK_ENABLED")
+    source_max_items_per_fetch: int = Field(default=50, alias="SOURCE_MAX_ITEMS_PER_FETCH")
+    source_max_item_age_hours: int = Field(default=72, alias="SOURCE_MAX_ITEM_AGE_HOURS")
+    source_excluded_names: str = Field(default="Reuters", alias="SOURCE_EXCLUDED_NAMES")
+    source_fetch_max_attempts: int = Field(default=3, alias="SOURCE_FETCH_MAX_ATTEMPTS")
+    source_fetch_retry_backoff_seconds: int = Field(
+        default=2,
+        alias="SOURCE_FETCH_RETRY_BACKOFF_SECONDS",
+    )
+    alpha_vantage_api_key: str = Field(default="", alias="ALPHA_VANTAGE_API_KEY")
+    finnhub_api_key: str = Field(default="", alias="FINNHUB_API_KEY")
+    polygon_api_key: str = Field(default="", alias="POLYGON_API_KEY")
+    market_fetch_max_attempts: int = Field(default=2, alias="MARKET_FETCH_MAX_ATTEMPTS")
+    market_fetch_retry_backoff_seconds: int = Field(
+        default=2,
+        alias="MARKET_FETCH_RETRY_BACKOFF_SECONDS",
+    )
+    refresh_report_enabled: bool = Field(default=True, alias="REFRESH_REPORT_ENABLED")
+    signal_retention_days: int = Field(default=30, alias="SIGNAL_RETENTION_DAYS")
+    signal_alert_threshold: float = Field(default=75.0, alias="SIGNAL_ALERT_THRESHOLD")
+    signal_alert_cooldown_minutes: int = Field(default=360, alias="SIGNAL_ALERT_COOLDOWN_MINUTES")
+    source_health_min_score: float = Field(default=35.0, alias="SOURCE_HEALTH_MIN_SCORE")
+    signal_min_strong_evidence_sources: int = Field(
+        default=2,
+        alias="SIGNAL_MIN_STRONG_EVIDENCE_SOURCES",
+    )
+    signal_allow_developing_default: bool = Field(
+        default=False,
+        alias="SIGNAL_ALLOW_DEVELOPING_DEFAULT",
+    )
+    evidence_link_recheck_hours: int = Field(default=24, alias="EVIDENCE_LINK_RECHECK_HOURS")
+    research_report_max_evidence_items: int = Field(
+        default=3,
+        alias="RESEARCH_REPORT_MAX_EVIDENCE_ITEMS",
+    )
+    signal_weight_mention_velocity: float = Field(
+        default=1.0, alias="SIGNAL_WEIGHT_MENTION_VELOCITY"
+    )
+    signal_weight_source_diversity: float = Field(
+        default=1.0, alias="SIGNAL_WEIGHT_SOURCE_DIVERSITY"
+    )
+    signal_weight_recency: float = Field(default=1.0, alias="SIGNAL_WEIGHT_RECENCY")
+    signal_weight_semantic_similarity: float = Field(
+        default=1.0, alias="SIGNAL_WEIGHT_SEMANTIC_SIMILARITY"
+    )
+    signal_weight_price_momentum: float = Field(default=1.0, alias="SIGNAL_WEIGHT_PRICE_MOMENTUM")
+    signal_weight_volume: float = Field(default=1.0, alias="SIGNAL_WEIGHT_VOLUME")
+    signal_weight_theme_persistence: float = Field(
+        default=1.0, alias="SIGNAL_WEIGHT_THEME_PERSISTENCE"
+    )
+    signal_weight_trust: float = Field(default=1.0, alias="SIGNAL_WEIGHT_TRUST")
+    signal_weight_evidence_quality: float = Field(
+        default=1.25,
+        alias="SIGNAL_WEIGHT_EVIDENCE_QUALITY",
+    )
+    signal_weight_novelty: float = Field(default=0.75, alias="SIGNAL_WEIGHT_NOVELTY")
+    social_signals_enabled: bool = Field(default=False, alias="SOCIAL_SIGNALS_ENABLED")
+    llm_mention_extraction_enabled: bool = Field(
+        default=False, alias="LLM_MENTION_EXTRACTION_ENABLED"
+    )
     job_run_retention_days: int = Field(default=30, alias="JOB_RUN_RETENTION_DAYS")
+    short_term_memory_window_size: int = Field(default=20, alias="SHORT_TERM_MEMORY_WINDOW_SIZE")
+    short_term_memory_expiry_minutes: int = Field(
+        default=43200,
+        alias="SHORT_TERM_MEMORY_EXPIRY_MINUTES",
+    )
+    conversation_event_retention_days: int = Field(
+        default=30,
+        alias="CONVERSATION_EVENT_RETENTION_DAYS",
+    )
+    long_term_memory_batch_size: int = Field(default=20, alias="LONG_TERM_MEMORY_BATCH_SIZE")
+    long_term_memory_top_k: int = Field(default=5, alias="LONG_TERM_MEMORY_TOP_K")
+    memory_candidates_per_batch: int = Field(default=6, alias="MEMORY_CANDIDATES_PER_BATCH")
+    memory_job_max_retries: int = Field(default=3, alias="MEMORY_JOB_MAX_RETRIES")
+    eval_llm_enabled: bool = Field(default=False, alias="EVAL_LLM_ENABLED")
+    eval_model: str = Field(default="", alias="EVAL_MODEL")
+    eval_max_cases: int = Field(default=50, alias="EVAL_MAX_CASES")
+    eval_output_path: str = Field(default="reports/eval", alias="EVAL_OUTPUT_PATH")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     @property

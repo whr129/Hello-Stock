@@ -1,19 +1,15 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from news_agent.scheduler.service import (
-    SchedulerControlService,
     RefreshSummary,
+    SchedulerControlService,
+    _due_pipelines,
     parse_config_value,
-    should_send_daily_recap,
-    validate_delivery_time,
+    run_scheduler_tick,
 )
 from news_agent.settings import Settings
-
-
-def test_validate_delivery_time_normalizes_24h_time() -> None:
-    assert validate_delivery_time("08:30") == "08:30"
 
 
 def test_parse_config_value_coerces_primitives() -> None:
@@ -23,34 +19,14 @@ def test_parse_config_value_coerces_primitives() -> None:
     assert parse_config_value("feed") == "feed"
 
 
-def test_should_send_daily_recap_only_once_per_local_day() -> None:
-    now = datetime(2026, 5, 1, 13, 0, tzinfo=UTC)
-    last_sent = datetime(2026, 5, 1, 12, 45, tzinfo=UTC)
+def test_refresh_retry_settings_have_defaults() -> None:
+    settings = Settings(openai_api_key="")
 
-    assert (
-        should_send_daily_recap(
-            now_utc=now,
-            timezone_name="America/Toronto",
-            delivery_time="08:30",
-            last_sent_at=last_sent,
-        )
-        is False
-    )
-
-
-def test_should_send_daily_recap_when_time_has_arrived_and_not_sent_today() -> None:
-    now = datetime(2026, 5, 1, 13, 0, tzinfo=UTC)
-    last_sent = datetime(2026, 4, 30, 13, 0, tzinfo=UTC)
-
-    assert (
-        should_send_daily_recap(
-            now_utc=now,
-            timezone_name="America/Toronto",
-            delivery_time="08:30",
-            last_sent_at=last_sent,
-        )
-        is True
-    )
+    assert settings.source_fetch_max_attempts == 3
+    assert settings.source_fetch_retry_backoff_seconds == 2
+    assert settings.market_fetch_max_attempts == 2
+    assert settings.market_fetch_retry_backoff_seconds == 2
+    assert settings.refresh_report_enabled is True
 
 
 def test_format_refresh_summary_includes_provider_counts() -> None:
@@ -62,7 +38,7 @@ def test_format_refresh_summary_includes_provider_counts() -> None:
         market_snapshot_count=3,
         error_count=1,
         provider_counts={"rss": 5, "twitter": 2},
-        errors=["Reuters Business: timeout"],
+        errors=["Business Feed: timeout"],
     )
 
     text = service.format_refresh_summary(summary)
@@ -71,7 +47,7 @@ def test_format_refresh_summary_includes_provider_counts() -> None:
     assert "rss: 5" in text
     assert "twitter: 2" in text
     assert "Error details:" in text
-    assert "Reuters Business: timeout" in text
+    assert "Business Feed: timeout" in text
 
 
 @pytest.mark.asyncio
@@ -110,3 +86,77 @@ async def test_can_start_refresh_recovers_stale_running_jobs(monkeypatch) -> Non
 
     assert await service.can_start_refresh() is True
     assert calls == ["recover", "commit", "check"]
+
+
+def test_due_pipelines_respects_intervals_and_market_hours() -> None:
+    settings = Settings(openai_api_key="")
+    now = datetime(2026, 5, 29, 14, 0, tzinfo=UTC)
+    last_runs = {
+        "market_prices": now - timedelta(seconds=599),
+        "breaking_resources": now - timedelta(seconds=1800),
+        "daily_resources": now - timedelta(seconds=3600),
+    }
+
+    assert _due_pipelines(settings, last_runs, now) == ["breaking_resources"]
+
+
+def test_due_pipelines_adds_prices_only_when_market_is_open() -> None:
+    settings = Settings(openai_api_key="")
+
+    assert "market_prices" in _due_pipelines(
+        settings,
+        {},
+        datetime(2026, 5, 29, 14, 0, tzinfo=UTC),
+    )
+    assert "market_prices" not in _due_pipelines(
+        settings,
+        {},
+        datetime(2026, 5, 30, 14, 0, tzinfo=UTC),
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_scheduler_tick_triggers_due_tiered_pipelines(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeSchedulerControlService:
+        session_factory = object()
+
+        def __init__(self, settings) -> None:
+            del settings
+
+        async def can_start_refresh(self) -> bool:
+            return True
+
+        async def run_refresh(self, job_type: str = "manual_refresh"):
+            calls.append(job_type)
+            return RefreshSummary(job_type, 0, 0, 0, 0, {}, [])
+
+        async def cleanup_expired_content(self):
+            calls.append("cleanup")
+            return {}
+
+    class FakeMemoryConsolidationService:
+        def __init__(self, session_factory, settings) -> None:
+            del session_factory, settings
+
+        async def process_due_jobs(self):
+            calls.append("memory")
+
+    monkeypatch.setattr(
+        "news_agent.scheduler.service.SchedulerControlService",
+        FakeSchedulerControlService,
+    )
+    monkeypatch.setattr(
+        "news_agent.scheduler.service.MemoryConsolidationService",
+        FakeMemoryConsolidationService,
+    )
+
+    result = await run_scheduler_tick(
+        Settings(openai_api_key=""),
+        {},
+        now=datetime(2026, 5, 29, 14, 0, tzinfo=UTC),
+    )
+
+    assert calls == ["market_prices", "breaking_resources", "daily_resources", "memory", "cleanup"]
+    assert set(result) == {"market_prices", "breaking_resources", "daily_resources"}

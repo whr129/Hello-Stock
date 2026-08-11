@@ -1,20 +1,27 @@
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from uuid import UUID as PythonUUID
 
-from sqlalchemy import delete, distinct, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from news_agent.research.source_health import update_source_health_metrics
 from news_agent.settings import Settings
 from news_agent.storage.models import (
     Article,
     ArticleEmbedding,
+    ConversationEvent,
     JobRun,
     LongTermMemory,
+    MarketEntity,
+    MarketMention,
+    MarketSignalSnapshot,
     MarketSnapshot,
+    MarketThemeMemory,
+    MemoryConsolidationJob,
     MemoryEmbedding,
     MemoryType,
-    Preference,
     RuntimeAlert,
     RuntimeError,
     RuntimeRun,
@@ -24,8 +31,18 @@ from news_agent.storage.models import (
     Summary,
     SummaryEmbedding,
     User,
-    WatchedTicker,
 )
+
+
+@dataclass(frozen=True)
+class MentionAggregate:
+    ticker: str | None
+    theme: str | None
+    mention_count: int
+    source_count: int
+    average_trust: float
+    latest_seen_at: datetime | None
+    evidence: list[dict[str, object]]
 
 
 def build_source_locator(provider: str, external_account: str) -> str:
@@ -34,6 +51,104 @@ def build_source_locator(provider: str, external_account: str) -> str:
     if normalized_provider == "rss":
         return normalized_account
     return f"{normalized_provider}://{normalized_account}"
+
+
+def _isoformat(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _mention_evidence_payload(
+    mention: MarketMention,
+    article: Article | None,
+    source: Source | None,
+) -> dict[str, object]:
+    article_url = article.url if article else None
+    source_config = dict(source.config or {}) if source else {}
+    source_health = dict(source_config.get("source_health") or {})
+    return {
+        "article_id": mention.article_id,
+        "summary_id": mention.summary_id,
+        "source_id": mention.source_id,
+        **_article_source_evidence_fields(article, source),
+        "link_status": "unchecked" if article_url else "missing",
+        "link_checked_at": None,
+        "source_health_score": source_health.get("score"),
+        "evidence_cluster_id": _evidence_cluster_id(article, source),
+        "evidence_reason": _evidence_reason(mention, article, source),
+        "text": mention.evidence_text or "",
+        "evidence_text": mention.evidence_text or "",
+        "source_family": mention.source_family,
+        "trust_score": mention.trust_score,
+        "created_at": _isoformat(mention.created_at),
+    }
+
+
+def _article_source_evidence_fields(
+    article: Article | None,
+    source: Source | None,
+) -> dict[str, object]:
+    return {
+        "article_title": article.title if article else None,
+        "article_url": article.url if article else None,
+        "published_at": _isoformat(article.published_at if article else None),
+        "article_created_at": _isoformat(article.created_at if article else None),
+        "source_name": source.name if source else None,
+        "source_provider": source.provider if source else None,
+    }
+
+
+def _evidence_cluster_id(article: Article | None, source: Source | None) -> str | None:
+    if article is None:
+        return None
+    source_family = source.provider if source else article.category
+    normalized_title = " ".join((article.title or "").lower().split())[:80]
+    return f"{source_family or 'source'}:{normalized_title}"
+
+
+def _evidence_reason(
+    mention: MarketMention,
+    article: Article | None,
+    source: Source | None,
+) -> str:
+    source_label = source.name if source else mention.source_family
+    title = article.title if article else "stored evidence"
+    return (
+        f"{source_label} is the stored source for "
+        f"{mention.ticker or mention.theme or 'this signal'} via {title}."
+    )
+
+
+def _select_preferred_signal_snapshots(
+    snapshots: list[MarketSignalSnapshot],
+    *,
+    limit: int,
+) -> list[MarketSignalSnapshot]:
+    latest_by_signal: dict[tuple[str | None, str | None], MarketSignalSnapshot] = {}
+    for snapshot in snapshots:
+        key = (snapshot.ticker, snapshot.theme)
+        current = latest_by_signal.get(key)
+        if current is None or _snapshot_preference(snapshot) > _snapshot_preference(current):
+            latest_by_signal[key] = snapshot
+    return sorted(
+        latest_by_signal.values(),
+        key=lambda snapshot: _snapshot_preference(snapshot),
+        reverse=True,
+    )[:limit]
+
+
+def _snapshot_preference(snapshot: MarketSignalSnapshot) -> tuple[int, datetime, float]:
+    return (
+        1 if _has_linked_evidence(snapshot) else 0,
+        snapshot.created_at or datetime.min.replace(tzinfo=UTC),
+        float(snapshot.total_score or 0.0),
+    )
+
+
+def _has_linked_evidence(snapshot: MarketSignalSnapshot) -> bool:
+    return any(
+        isinstance(item, dict) and bool(item.get("article_url"))
+        for item in snapshot.evidence or []
+    )
 
 
 class UserRepository:
@@ -51,112 +166,18 @@ class UserRepository:
 
         user = User(
             telegram_user_id=telegram_user_id,
-            local_region=self.settings.default_local_region,
         )
         self.session.add(user)
         await self.session.flush()
-        self.session.add(Preference(user_id=user.id, topics=[]))
-        await self.session.flush()
         return user
 
-    async def set_local_region(self, user_id: int, local_region: str) -> User | None:
+    async def update_memory_cursor(self, user_id: int, event_id: int) -> None:
         await self.session.execute(
-            update(User).where(User.id == user_id).values(local_region=local_region)
+            update(User)
+            .where(User.id == user_id)
+            .values(memory_cursor_event_id=event_id)
         )
         await self.session.flush()
-        result = await self.session.execute(select(User).where(User.id == user_id))
-        return result.scalar_one_or_none()
-
-    async def set_timezone(self, user_id: int, timezone: str) -> User | None:
-        await self.session.execute(update(User).where(User.id == user_id).values(timezone=timezone))
-        await self.session.flush()
-        result = await self.session.execute(select(User).where(User.id == user_id))
-        return result.scalar_one_or_none()
-
-
-class PreferenceRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self.session = session
-
-    async def get_for_user(self, user_id: int) -> Preference:
-        result = await self.session.execute(select(Preference).where(Preference.user_id == user_id))
-        preference = result.scalar_one_or_none()
-        if preference is None:
-            preference = Preference(user_id=user_id)
-            self.session.add(preference)
-            await self.session.flush()
-        return preference
-
-    async def set_topics(self, user_id: int, topics: Sequence[str]) -> Preference:
-        preference = await self.get_for_user(user_id)
-        preference.topics = [topic.lower() for topic in topics]
-        await self.session.flush()
-        return preference
-
-    async def set_delivery_time(self, user_id: int, delivery_time: str) -> Preference:
-        preference = await self.get_for_user(user_id)
-        preference.delivery_time = delivery_time
-        await self.session.flush()
-        return preference
-
-    async def clear_delivery_time(self, user_id: int) -> Preference:
-        preference = await self.get_for_user(user_id)
-        preference.delivery_time = None
-        await self.session.flush()
-        return preference
-
-    async def mark_daily_recap_sent(self, user_id: int, sent_at: datetime) -> Preference:
-        preference = await self.get_for_user(user_id)
-        preference.last_daily_recap_sent_at = sent_at
-        await self.session.flush()
-        return preference
-
-    async def list_with_delivery_time(self) -> list[tuple[User, Preference]]:
-        result = await self.session.execute(
-            select(User, Preference)
-            .join(Preference, Preference.user_id == User.id)
-            .where(Preference.delivery_time.is_not(None))
-        )
-        return list(result.all())
-
-
-class TickerRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self.session = session
-
-    async def list_for_user(self, user_id: int) -> list[str]:
-        result = await self.session.execute(
-            select(WatchedTicker.symbol)
-            .where(WatchedTicker.user_id == user_id)
-            .order_by(WatchedTicker.symbol)
-        )
-        return list(result.scalars())
-
-    async def list_all_symbols(self) -> list[str]:
-        result = await self.session.execute(
-            select(distinct(WatchedTicker.symbol)).order_by(WatchedTicker.symbol)
-        )
-        return list(result.scalars())
-
-    async def add_many(self, user_id: int, symbols: Sequence[str]) -> list[str]:
-        existing = set(await self.list_for_user(user_id))
-        added: list[str] = []
-        for symbol in {item.upper() for item in symbols if item.strip()}:
-            if symbol not in existing:
-                self.session.add(WatchedTicker(user_id=user_id, symbol=symbol))
-                added.append(symbol)
-        await self.session.flush()
-        return sorted(added)
-
-    async def remove_many(self, user_id: int, symbols: Sequence[str]) -> list[str]:
-        normalized = [item.upper() for item in symbols]
-        await self.session.execute(
-            delete(WatchedTicker).where(
-                WatchedTicker.user_id == user_id, WatchedTicker.symbol.in_(normalized)
-            )
-        )
-        await self.session.flush()
-        return sorted(normalized)
 
 
 class SourceRepository:
@@ -178,6 +199,10 @@ class SourceRepository:
         )
         return list(result.scalars())
 
+    async def list_all(self) -> list[Source]:
+        result = await self.session.execute(select(Source).order_by(Source.name))
+        return list(result.scalars())
+
     async def get_by_id(self, source_id: int) -> Source | None:
         result = await self.session.execute(select(Source).where(Source.id == source_id))
         return result.scalar_one_or_none()
@@ -193,6 +218,7 @@ class SourceRepository:
         config: dict | None = None,
         field_mapping: dict | None = None,
         fetch_mode: str | None = None,
+        trust_score: float | None = None,
     ) -> Source:
         normalized_provider = provider.strip().lower()
         normalized_account = external_account.strip()
@@ -209,6 +235,8 @@ class SourceRepository:
                 source.field_mapping = {**dict(source.field_mapping or {}), **field_mapping}
             if fetch_mode is not None:
                 source.fetch_mode = fetch_mode
+            if trust_score is not None:
+                source.trust_score = trust_score
             await self.session.flush()
             return source
 
@@ -222,6 +250,7 @@ class SourceRepository:
             fetch_mode=fetch_mode or ("rss" if normalized_provider == "rss" else None),
             category=category,
             owner_user_id=owner_user_id,
+            trust_score=trust_score if trust_score is not None else 0.5,
         )
         self.session.add(source)
         await self.session.flush()
@@ -275,35 +304,68 @@ class SourceRepository:
             source.last_error = None
         else:
             source.last_error = error
+            source.config = update_source_health_metrics(
+                dict(source.config or {}),
+                failed=1,
+                checked_at=fetched_at,
+            )
         await self.session.flush()
 
-    async def ensure_default_sources(self) -> list[Source]:
-        defaults = [
-            (
-                "Reuters Business",
-                "rss",
-                "https://feeds.reuters.com/reuters/businessNews",
-                "markets",
-            ),
-            ("BBC World", "rss", "https://feeds.bbci.co.uk/news/world/rss.xml", "world"),
-            ("CBC Top Stories", "rss", "https://www.cbc.ca/cmlink/rss-topstories", "local"),
-            (
-                "MarketWatch Top Stories",
-                "rss",
-                "https://feeds.marketwatch.com/marketwatch/topstories/",
-                "markets",
-            ),
-        ]
+    async def record_source_quality(
+        self,
+        source_id: int,
+        *,
+        fetched: int = 0,
+        accepted: int = 0,
+        rejected: int = 0,
+        saved: int = 0,
+        duplicates: int = 0,
+        link_checked: int = 0,
+        link_available: int = 0,
+    ) -> None:
+        source = await self.get_by_id(source_id)
+        if source is None:
+            return
+        source.config = update_source_health_metrics(
+            dict(source.config or {}),
+            fetched=fetched,
+            accepted=accepted,
+            rejected=rejected,
+            saved=saved,
+            duplicates=duplicates,
+            link_checked=link_checked,
+            link_available=link_available,
+        )
+        await self.session.flush()
+
+    async def ensure_default_sources(
+        self,
+        defaults: Sequence[dict[str, object]] | None = None,
+    ) -> list[Source]:
         sources: list[Source] = []
-        for name, provider, external_account, category in defaults:
+        for item in defaults or []:
+            provider = str(item.get("provider") or "").strip().lower()
+            external_account = str(
+                item.get("external_account") or item.get("url") or item.get("feed_url") or ""
+            ).strip()
+            name = str(item.get("name") or external_account).strip()
+            if not provider or not external_account or not name:
+                continue
+            config = dict(item.get("config") or {})
+            if provider in {"rss", "twitter", "newsletter"} and "feed_url" not in config:
+                config["feed_url"] = str(item.get("feed_url") or external_account)
             sources.append(
                 await self.add_source(
                     name=name,
                     provider=provider,
                     external_account=external_account,
-                    category=category,
-                    config={"feed_url": external_account},
-                    fetch_mode="rss",
+                    category=str(item.get("category") or "markets"),
+                    config=config,
+                    fetch_mode=str(
+                        item.get("fetch_mode")
+                        or ("rss" if provider in {"rss", "twitter", "newsletter"} else provider)
+                    ),
+                    trust_score=float(item.get("trust_score") or 0.5),
                 )
             )
         return sources
@@ -357,8 +419,14 @@ class ArticleRepository:
         return list(result.scalars())
 
     async def delete_created_before(self, cutoff: datetime) -> int:
+        summarized = select(Summary.article_id).where(Summary.article_id.is_not(None))
+        mentioned = select(MarketMention.article_id).where(MarketMention.article_id.is_not(None))
         result = await self.session.execute(
-            delete(Article).where(Article.created_at < cutoff).returning(Article.id)
+            delete(Article)
+            .where(Article.created_at < cutoff)
+            .where(Article.id.not_in(summarized))
+            .where(Article.id.not_in(mentioned))
+            .returning(Article.id)
         )
         await self.session.flush()
         rows = result.scalars().all()
@@ -390,11 +458,373 @@ class MarketRepository:
 
     async def delete_captured_before(self, cutoff: datetime) -> int:
         result = await self.session.execute(
-            delete(MarketSnapshot).where(MarketSnapshot.captured_at < cutoff).returning(MarketSnapshot.id)
+            delete(MarketSnapshot)
+            .where(MarketSnapshot.captured_at < cutoff)
+            .returning(MarketSnapshot.id)
         )
         await self.session.flush()
         rows = result.scalars().all()
         return len(rows)
+
+    async def latest_snapshot_for_symbols(self, symbols: Sequence[str]) -> list[MarketSnapshot]:
+        snapshots: list[MarketSnapshot] = []
+        for symbol in {item.upper() for item in symbols if item.strip()}:
+            result = await self.session.execute(
+                select(MarketSnapshot)
+                .where(MarketSnapshot.symbol == symbol)
+                .order_by(MarketSnapshot.captured_at.desc())
+                .limit(1)
+            )
+            snapshot = result.scalar_one_or_none()
+            if snapshot:
+                snapshots.append(snapshot)
+        return snapshots
+
+
+class MarketEntityRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def upsert_by_ticker(
+        self,
+        ticker: str,
+        *,
+        company_name: str | None = None,
+        sector: str | None = None,
+        industry: str | None = None,
+        aliases: Sequence[str] | None = None,
+        exchange: str | None = None,
+        active: bool = True,
+    ) -> MarketEntity:
+        normalized = ticker.upper()
+        result = await self.session.execute(
+            select(MarketEntity).where(MarketEntity.ticker == normalized)
+        )
+        entity = result.scalar_one_or_none()
+        if entity is None:
+            entity = MarketEntity(ticker=normalized)
+            self.session.add(entity)
+        entity.company_name = company_name if company_name is not None else entity.company_name
+        entity.sector = sector if sector is not None else entity.sector
+        entity.industry = industry if industry is not None else entity.industry
+        entity.exchange = exchange if exchange is not None else entity.exchange
+        entity.active = active
+        if aliases is not None:
+            entity.aliases = sorted({alias.strip() for alias in aliases if alias.strip()})
+        await self.session.flush()
+        return entity
+
+    async def list_active(self) -> list[MarketEntity]:
+        result = await self.session.execute(
+            select(MarketEntity).where(MarketEntity.active.is_(True)).order_by(MarketEntity.ticker)
+        )
+        return list(result.scalars())
+
+
+class MarketMentionRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def save(self, mention: MarketMention) -> MarketMention:
+        if mention.article_id is not None:
+            result = await self.session.execute(
+                select(MarketMention).where(
+                    MarketMention.article_id == mention.article_id,
+                    MarketMention.ticker == mention.ticker,
+                    MarketMention.theme == mention.theme,
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing:
+                return existing
+        self.session.add(mention)
+        await self.session.flush()
+        return mention
+
+    async def list_articles_for_extraction(
+        self,
+        *,
+        limit: int = 50,
+    ) -> list[tuple[Article, Source | None]]:
+        processed = select(MarketMention.article_id).where(MarketMention.article_id.is_not(None))
+        result = await self.session.execute(
+            select(Article, Source)
+            .outerjoin(Source, Source.id == Article.source_id)
+            .where(Article.id.not_in(processed))
+            .order_by(Article.published_at.desc().nullslast(), Article.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
+    async def list_summaries_for_extraction(
+        self,
+        *,
+        limit: int = 50,
+    ) -> list[tuple[Summary, Article | None, Source | None]]:
+        processed = select(MarketMention.summary_id).where(MarketMention.summary_id.is_not(None))
+        result = await self.session.execute(
+            select(Summary, Article, Source)
+            .outerjoin(Article, Article.id == Summary.article_id)
+            .outerjoin(Source, Source.id == Article.source_id)
+            .where(Summary.id.not_in(processed))
+            .order_by(Summary.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
+    async def aggregate(self, *, since: datetime) -> list[MentionAggregate]:
+        result = await self.session.execute(
+            select(MarketMention, Article, Source)
+            .outerjoin(Article, Article.id == MarketMention.article_id)
+            .outerjoin(Source, Source.id == MarketMention.source_id)
+            .where(MarketMention.created_at >= since)
+            .order_by(MarketMention.created_at.desc())
+        )
+        grouped: dict[tuple[str | None, str | None], list[MarketMention]] = {}
+        evidence_by_mention_id: dict[int, dict[str, object]] = {}
+        for mention, article, source in result.all():
+            key = (mention.ticker, mention.theme)
+            if key == (None, None):
+                continue
+            grouped.setdefault(key, []).append(mention)
+            evidence_by_mention_id[mention.id] = _mention_evidence_payload(
+                mention,
+                article,
+                source,
+            )
+
+        aggregates: list[MentionAggregate] = []
+        for (ticker, theme), mentions in grouped.items():
+            source_ids = {
+                mention.source_id or mention.source_family
+                for mention in mentions
+                if mention.source_id or mention.source_family
+            }
+            evidence = [evidence_by_mention_id[mention.id] for mention in mentions[:5]]
+            trust_values = [mention.trust_score for mention in mentions]
+            aggregates.append(
+                MentionAggregate(
+                    ticker=ticker,
+                    theme=theme,
+                    mention_count=sum(mention.mention_count for mention in mentions),
+                    source_count=len(source_ids),
+                    average_trust=sum(trust_values) / max(len(trust_values), 1),
+                    latest_seen_at=max((mention.created_at for mention in mentions), default=None),
+                    evidence=evidence,
+                )
+            )
+        return aggregates
+
+    async def top_tickers(self, *, since: datetime, limit: int = 25) -> list[str]:
+        result = await self.session.execute(
+            select(MarketMention.ticker, func.sum(MarketMention.mention_count).label("mentions"))
+            .where(MarketMention.created_at >= since)
+            .where(MarketMention.ticker.is_not(None))
+            .group_by(MarketMention.ticker)
+            .order_by(func.sum(MarketMention.mention_count).desc())
+            .limit(limit)
+        )
+        return [ticker for ticker, _ in result.all() if ticker]
+
+    async def delete_created_before(self, cutoff: datetime) -> int:
+        result = await self.session.execute(
+            delete(MarketMention)
+            .where(MarketMention.created_at < cutoff)
+            .returning(MarketMention.id)
+        )
+        await self.session.flush()
+        return len(result.scalars().all())
+
+
+class MarketSignalRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def save_snapshot(
+        self,
+        *,
+        ticker: str | None,
+        theme: str | None,
+        window: str,
+        component_scores: dict[str, float],
+        total_score: float,
+        evidence: list[dict[str, object]],
+    ) -> MarketSignalSnapshot:
+        snapshot = MarketSignalSnapshot(
+            ticker=ticker.upper() if ticker else None,
+            theme=theme,
+            window=window,
+            mention_velocity=component_scores.get("mention_velocity", 0.0),
+            source_diversity=component_scores.get("source_diversity", 0.0),
+            recency_score=component_scores.get("recency_score", 0.0),
+            semantic_similarity=component_scores.get("semantic_similarity", 0.0),
+            price_momentum=component_scores.get("price_momentum", 0.0),
+            volume_signal=component_scores.get("volume_signal", 0.0),
+            theme_persistence=component_scores.get("theme_persistence", 0.0),
+            trust_score=component_scores.get("trust_score", 0.0),
+            total_score=total_score,
+            component_scores=component_scores,
+            evidence=evidence,
+        )
+        self.session.add(snapshot)
+        await self.session.flush()
+        return snapshot
+
+    async def fetch_top_candidates(
+        self,
+        *,
+        window: str = "24h",
+        limit: int = 5,
+        since: datetime | None = None,
+    ) -> list[MarketSignalSnapshot]:
+        if since is None:
+            since = datetime.now(UTC) - timedelta(days=1)
+        result = await self.session.execute(
+            select(MarketSignalSnapshot)
+            .where(MarketSignalSnapshot.window == window)
+            .where(MarketSignalSnapshot.created_at >= since)
+            .order_by(
+                MarketSignalSnapshot.created_at.desc(),
+                MarketSignalSnapshot.total_score.desc(),
+            )
+            .limit(max(limit * 10, 50))
+        )
+        return _select_preferred_signal_snapshots(list(result.scalars()), limit=limit)
+
+    async def fetch_signal_history(
+        self,
+        ticker: str,
+        *,
+        limit: int = 10,
+    ) -> list[MarketSignalSnapshot]:
+        result = await self.session.execute(
+            select(MarketSignalSnapshot)
+            .where(MarketSignalSnapshot.ticker == ticker.upper())
+            .order_by(MarketSignalSnapshot.created_at.desc())
+            .limit(max(limit * 10, 50))
+        )
+        return _select_preferred_signal_snapshots(list(result.scalars()), limit=limit)
+
+    async def backfill_evidence_links(self, *, limit: int = 500) -> int:
+        result = await self.session.execute(
+            select(MarketSignalSnapshot)
+            .order_by(MarketSignalSnapshot.created_at.desc())
+            .limit(limit)
+        )
+        snapshots = list(result.scalars())
+        article_ids = sorted(
+            {
+                int(item["article_id"])
+                for snapshot in snapshots
+                for item in snapshot.evidence or []
+                if isinstance(item, dict)
+                and item.get("article_id") is not None
+                and not item.get("article_url")
+            }
+        )
+        if not article_ids:
+            return 0
+        article_rows = await self.session.execute(
+            select(Article, Source)
+            .outerjoin(Source, Source.id == Article.source_id)
+            .where(Article.id.in_(article_ids))
+        )
+        article_context = {
+            article.id: (article, source)
+            for article, source in article_rows.all()
+        }
+        updated = 0
+        for snapshot in snapshots:
+            evidence = []
+            changed = False
+            for item in snapshot.evidence or []:
+                if not isinstance(item, dict):
+                    evidence.append(item)
+                    continue
+                enriched = dict(item)
+                article_id = enriched.get("article_id")
+                if article_id is not None and not enriched.get("article_url"):
+                    article, source = article_context.get(int(article_id), (None, None))
+                    if article:
+                        enriched = {
+                            **enriched,
+                            **_article_source_evidence_fields(article, source),
+                        }
+                        changed = True
+                evidence.append(enriched)
+            if changed:
+                snapshot.evidence = evidence
+                updated += 1
+        if updated:
+            await self.session.flush()
+        return updated
+
+    async def update_snapshot_evidence(
+        self,
+        snapshot_id: int,
+        evidence: list[dict[str, object]],
+    ) -> bool:
+        result = await self.session.execute(
+            update(MarketSignalSnapshot)
+            .where(MarketSignalSnapshot.id == snapshot_id)
+            .values(evidence=evidence)
+            .returning(MarketSignalSnapshot.id)
+        )
+        await self.session.flush()
+        return result.scalar_one_or_none() is not None
+
+    async def delete_created_before(self, cutoff: datetime) -> int:
+        result = await self.session.execute(
+            delete(MarketSignalSnapshot)
+            .where(MarketSignalSnapshot.created_at < cutoff)
+            .returning(MarketSignalSnapshot.id)
+        )
+        await self.session.flush()
+        return len(result.scalars().all())
+
+
+class MarketThemeMemoryRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def upsert(
+        self,
+        *,
+        theme: str,
+        summary: str,
+        related_tickers: Sequence[str] | None = None,
+        related_sectors: Sequence[str] | None = None,
+        evidence_count: int = 1,
+        confidence: float = 0.5,
+        seen_at: datetime | None = None,
+    ) -> MarketThemeMemory:
+        normalized = theme.strip().lower()
+        result = await self.session.execute(
+            select(MarketThemeMemory).where(MarketThemeMemory.theme == normalized)
+        )
+        memory = result.scalar_one_or_none()
+        if memory is None:
+            memory = MarketThemeMemory(
+                theme=normalized,
+                first_seen_at=seen_at or datetime.now(UTC),
+            )
+            self.session.add(memory)
+        memory.summary = summary
+        memory.related_tickers = sorted({item.upper() for item in related_tickers or []})
+        memory.related_sectors = sorted({item for item in related_sectors or []})
+        memory.evidence_count = evidence_count
+        memory.confidence = confidence
+        memory.last_seen_at = seen_at or datetime.now(UTC)
+        await self.session.flush()
+        return memory
+
+    async def list_recent(self, *, limit: int = 10) -> list[MarketThemeMemory]:
+        result = await self.session.execute(
+            select(MarketThemeMemory)
+            .order_by(MarketThemeMemory.last_seen_at.desc().nullslast())
+            .limit(limit)
+        )
+        return list(result.scalars())
 
 
 class SummaryRepository:
@@ -430,8 +860,12 @@ class SummaryRepository:
         return summary
 
     async def delete_created_before(self, cutoff: datetime) -> int:
+        mentioned = select(MarketMention.summary_id).where(MarketMention.summary_id.is_not(None))
         result = await self.session.execute(
-            delete(Summary).where(Summary.created_at < cutoff).returning(Summary.id)
+            delete(Summary)
+            .where(Summary.created_at < cutoff)
+            .where(Summary.id.not_in(mentioned))
+            .returning(Summary.id)
         )
         await self.session.flush()
         rows = result.scalars().all()
@@ -479,6 +913,18 @@ class EmbeddingRepository:
         self.session.add(item)
         await self.session.flush()
         return item
+
+    async def replace_memory_embedding(
+        self,
+        memory_id: int,
+        embedding: list[float],
+        embedding_model: str,
+    ) -> MemoryEmbedding:
+        await self.session.execute(
+            delete(MemoryEmbedding).where(MemoryEmbedding.memory_id == memory_id)
+        )
+        await self.session.flush()
+        return await self.save_memory_embedding(memory_id, embedding, embedding_model)
 
 
 class JobRepository:
@@ -552,7 +998,13 @@ class RuntimeRunRepository:
         await self.session.flush()
         return item
 
-    async def finish(self, run_id: int, *, status: str, summary: str | None = None) -> RuntimeRun | None:
+    async def finish(
+        self,
+        run_id: int,
+        *,
+        status: str,
+        summary: str | None = None,
+    ) -> RuntimeRun | None:
         result = await self.session.execute(select(RuntimeRun).where(RuntimeRun.id == run_id))
         item = result.scalar_one_or_none()
         if item is None:
@@ -560,6 +1012,15 @@ class RuntimeRunRepository:
         item.status = status
         item.summary = summary
         item.completed_at = datetime.now(UTC)
+        await self.session.flush()
+        return item
+
+    async def update_metadata(self, run_id: int, metadata: dict) -> RuntimeRun | None:
+        result = await self.session.execute(select(RuntimeRun).where(RuntimeRun.id == run_id))
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        item.run_metadata = {**dict(item.run_metadata or {}), **metadata}
         await self.session.flush()
         return item
 
@@ -743,6 +1204,202 @@ class RuntimeAlertRepository:
         return list(result.scalars())
 
 
+class ConversationEventRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(
+        self,
+        *,
+        user_id: int,
+        chat_id: int,
+        role: str,
+        content: str,
+        metadata: dict | None = None,
+    ) -> ConversationEvent:
+        item = ConversationEvent(
+            user_id=user_id,
+            chat_id=chat_id,
+            role=role,
+            content=content,
+            event_metadata=dict(metadata or {}),
+        )
+        self.session.add(item)
+        await self.session.flush()
+        return item
+
+    async def list_between_ids(
+        self,
+        *,
+        user_id: int,
+        start_event_id: int,
+        end_event_id: int,
+    ) -> list[ConversationEvent]:
+        result = await self.session.execute(
+            select(ConversationEvent)
+            .where(ConversationEvent.user_id == user_id)
+            .where(ConversationEvent.id >= start_event_id)
+            .where(ConversationEvent.id <= end_event_id)
+            .order_by(ConversationEvent.id)
+        )
+        return list(result.scalars())
+
+    async def list_oldest_unprocessed_user_events(
+        self,
+        *,
+        user_id: int,
+        after_event_id: int,
+        limit: int,
+    ) -> list[ConversationEvent]:
+        result = await self.session.execute(
+            select(ConversationEvent)
+            .where(ConversationEvent.user_id == user_id)
+            .where(ConversationEvent.role == "user")
+            .where(ConversationEvent.id > after_event_id)
+            .order_by(ConversationEvent.id)
+            .limit(limit)
+        )
+        return list(result.scalars())
+
+    async def count_unprocessed_user_events(self, *, user_id: int, after_event_id: int) -> int:
+        result = await self.session.execute(
+            select(func.count(ConversationEvent.id))
+            .where(ConversationEvent.user_id == user_id)
+            .where(ConversationEvent.role == "user")
+            .where(ConversationEvent.id > after_event_id)
+        )
+        return int(result.scalar_one() or 0)
+
+    async def latest_user_chat_id(self) -> int | None:
+        result = await self.session.execute(
+            select(ConversationEvent.chat_id)
+            .where(ConversationEvent.role == "user")
+            .order_by(ConversationEvent.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def latest_event_id_for_user(self, user_id: int) -> int:
+        result = await self.session.execute(
+            select(func.max(ConversationEvent.id)).where(ConversationEvent.user_id == user_id)
+        )
+        return int(result.scalar_one() or 0)
+
+    async def delete_created_before(self, cutoff: datetime) -> int:
+        result = await self.session.execute(
+            delete(ConversationEvent)
+            .where(ConversationEvent.created_at < cutoff)
+            .returning(ConversationEvent.id)
+        )
+        await self.session.flush()
+        return len(result.scalars().all())
+
+
+class MemoryConsolidationJobRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def has_active_job(self, user_id: int) -> bool:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob.id)
+            .where(MemoryConsolidationJob.user_id == user_id)
+            .where(MemoryConsolidationJob.status.in_(("pending", "running")))
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def create(
+        self,
+        *,
+        user_id: int,
+        source_start_event_id: int,
+        source_end_event_id: int,
+        message_count: int,
+    ) -> MemoryConsolidationJob:
+        item = MemoryConsolidationJob(
+            user_id=user_id,
+            source_start_event_id=source_start_event_id,
+            source_end_event_id=source_end_event_id,
+            message_count=message_count,
+            status="pending",
+        )
+        self.session.add(item)
+        await self.session.flush()
+        return item
+
+    async def get(self, job_id: int) -> MemoryConsolidationJob | None:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob).where(MemoryConsolidationJob.id == job_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_pending(self, *, limit: int = 5) -> list[MemoryConsolidationJob]:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob)
+            .where(MemoryConsolidationJob.status == "pending")
+            .order_by(MemoryConsolidationJob.created_at)
+            .limit(limit)
+        )
+        return list(result.scalars())
+
+    async def mark_running(self, job_id: int) -> MemoryConsolidationJob | None:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob).where(MemoryConsolidationJob.id == job_id)
+        )
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        item.status = "running"
+        item.started_at = datetime.now(UTC)
+        item.error_message = None
+        await self.session.flush()
+        return item
+
+    async def mark_completed(self, job_id: int) -> MemoryConsolidationJob | None:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob).where(MemoryConsolidationJob.id == job_id)
+        )
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        item.status = "completed"
+        item.completed_at = datetime.now(UTC)
+        item.error_message = None
+        await self.session.flush()
+        return item
+
+    async def mark_failed(
+        self,
+        job_id: int,
+        *,
+        error_message: str,
+        max_retries: int,
+    ) -> MemoryConsolidationJob | None:
+        result = await self.session.execute(
+            select(MemoryConsolidationJob).where(MemoryConsolidationJob.id == job_id)
+        )
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        item.retry_count += 1
+        item.error_message = error_message
+        item.completed_at = datetime.now(UTC)
+        item.status = "pending" if item.retry_count < max_retries else "failed"
+        if item.status == "pending":
+            item.started_at = None
+        await self.session.flush()
+        return item
+
+    async def delete_for_user(self, user_id: int) -> int:
+        result = await self.session.execute(
+            delete(MemoryConsolidationJob)
+            .where(MemoryConsolidationJob.user_id == user_id)
+            .returning(MemoryConsolidationJob.id)
+        )
+        await self.session.flush()
+        return len(result.scalars().all())
+
+
 class MemoryRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -751,8 +1408,26 @@ class MemoryRepository:
         result = await self.session.execute(
             select(LongTermMemory)
             .where(LongTermMemory.user_id == user_id)
+            .where(LongTermMemory.status == "active")
             .order_by(LongTermMemory.updated_at.desc())
             .limit(20)
+        )
+        return list(result.scalars())
+
+    async def semantic_search_for_user(
+        self,
+        *,
+        user_id: int,
+        query_embedding: list[float],
+        limit: int = 5,
+    ) -> list[LongTermMemory]:
+        result = await self.session.execute(
+            select(LongTermMemory)
+            .join(MemoryEmbedding, MemoryEmbedding.memory_id == LongTermMemory.id)
+            .where(LongTermMemory.user_id == user_id)
+            .where(LongTermMemory.status == "active")
+            .order_by(MemoryEmbedding.embedding.cosine_distance(query_embedding))
+            .limit(limit)
         )
         return list(result.scalars())
 
@@ -763,15 +1438,56 @@ class MemoryRepository:
         memory_type: MemoryType = MemoryType.EXPLICIT,
         source: str = "user",
         confidence: float = 1.0,
+        category: str = "general",
+        source_job_id: int | None = None,
     ) -> LongTermMemory:
         memory = LongTermMemory(
             user_id=user_id,
             memory_text=text,
             memory_type=memory_type.value,
+            category=category,
+            status="active",
             source=source,
             confidence=confidence,
+            source_job_id=source_job_id,
+            last_seen_at=datetime.now(UTC),
         )
         self.session.add(memory)
+        await self.session.flush()
+        return memory
+
+    async def get(self, memory_id: int) -> LongTermMemory | None:
+        result = await self.session.execute(
+            select(LongTermMemory).where(LongTermMemory.id == memory_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def update_memory(
+        self,
+        *,
+        memory_id: int,
+        text: str,
+        category: str,
+        confidence: float,
+        source_job_id: int | None = None,
+    ) -> LongTermMemory | None:
+        memory = await self.get(memory_id)
+        if memory is None:
+            return None
+        memory.memory_text = text
+        memory.category = category
+        memory.confidence = confidence
+        memory.source_job_id = source_job_id
+        memory.last_seen_at = datetime.now(UTC)
+        memory.status = "active"
+        await self.session.flush()
+        return memory
+
+    async def mark_seen(self, memory_id: int) -> LongTermMemory | None:
+        memory = await self.get(memory_id)
+        if memory is None:
+            return None
+        memory.last_seen_at = datetime.now(UTC)
         await self.session.flush()
         return memory
 
@@ -783,6 +1499,34 @@ class MemoryRepository:
             )
         )
         await self.session.flush()
+
+    async def nearest_for_user(
+        self,
+        *,
+        user_id: int,
+        memory_type: MemoryType | str,
+        query_embedding: list[float],
+        limit: int = 3,
+    ) -> list[tuple[LongTermMemory, float]]:
+        memory_type_value = (
+            memory_type.value if isinstance(memory_type, MemoryType) else memory_type
+        )
+        result = await self.session.execute(
+            select(
+                LongTermMemory,
+                MemoryEmbedding.embedding.cosine_distance(query_embedding).label("distance"),
+            )
+            .join(MemoryEmbedding, MemoryEmbedding.memory_id == LongTermMemory.id)
+            .where(LongTermMemory.user_id == user_id)
+            .where(LongTermMemory.memory_type == memory_type_value)
+            .where(LongTermMemory.status == "active")
+            .order_by("distance")
+            .limit(limit)
+        )
+        rows = []
+        for memory, distance in result.all():
+            rows.append((memory, float(distance)))
+        return rows
 
     async def forget(self, user_id: int, public_id: str) -> bool:
         try:
@@ -819,3 +1563,12 @@ class ShortTermSessionRepository:
             item.state = state
             item.expires_at = expires_at
         await self.session.flush()
+
+    async def delete_expired_before(self, cutoff: datetime) -> int:
+        result = await self.session.execute(
+            delete(ShortTermSession)
+            .where(ShortTermSession.expires_at < cutoff)
+            .returning(ShortTermSession.chat_id)
+        )
+        await self.session.flush()
+        return len(result.scalars().all())

@@ -1,10 +1,5 @@
 from typing import Any, TypedDict
 
-from news_agent.app.state import Intent, SupervisorState as NewsAgentState
-
-Subagent = str
-ToolName = str
-
 
 class SchedulerState(TypedDict, total=False):
     job_id: int

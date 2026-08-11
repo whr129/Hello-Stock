@@ -5,6 +5,8 @@ Revises: 0002_scheduler_recap_sources
 Create Date: 2026-05-01
 """
 
+# ruff: noqa: E501
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
