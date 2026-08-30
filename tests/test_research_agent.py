@@ -1,3 +1,6 @@
+import json
+from types import SimpleNamespace
+
 import pytest
 
 from news_agent.research import agents
@@ -87,6 +90,56 @@ async def test_research_command_runs_extended_pipeline(monkeypatch) -> None:
     assert result["metadata"]["signal_evidence_backfill_count"] == 4
     assert result["metadata"]["confident_signal_count"] == 6
     assert {"AI", "AI infrastructure", "semiconductors"} <= set(result["metadata"]["sectors"])
+
+
+@pytest.mark.asyncio
+async def test_research_agent_llm_loop_feeds_web_enrichment(monkeypatch) -> None:
+    tool_call = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(
+            name="company_web_research",
+            arguments=json.dumps({"companies": [{"ticker": "NVDA"}]}),
+        ),
+    )
+    messages = [
+        SimpleNamespace(content=None, tool_calls=[tool_call]),
+        SimpleNamespace(content="gathered context", tool_calls=[]),
+        SimpleNamespace(content="synthesized report", tool_calls=[]),
+    ]
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            del kwargs
+            return SimpleNamespace(choices=[SimpleNamespace(message=messages.pop(0))])
+
+    packet = SimpleNamespace(
+        ticker="NVDA",
+        status="complete",
+        evidence=[SimpleNamespace(title="Nvidia filing", url="https://example.com/filing")],
+    )
+
+    class FakeCoordinator:
+        async def research_many(self, candidates, *, query, horizon):
+            del candidates, query, horizon
+            return [packet]
+
+    monkeypatch.setattr(agents, "MarketSignalRepository", _FakeMarketSignalRepository)
+    agent = ResearchSubagent(
+        session_factory=_FakeSessionFactory(),
+        settings=Settings(openai_api_key="test", research_web_enabled=True),
+    )
+    agent.research_llm_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions())
+    )
+    agent.company_research = FakeCoordinator()
+
+    result = await agent.run(
+        {"command": "/candidates", "args": ["NVDA"], "message_text": "/candidates NVDA"}
+    )
+
+    assert result["response"] == "synthesized report"
+    assert result["metadata"]["research_llm_used"] is True
+    assert result["metadata"]["research_web_llm_packet_count"] == 1
 
 
 class _FakeSessionFactory:

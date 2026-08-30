@@ -7,24 +7,26 @@ from news_agent.llm_contracts import (
     MarketImpactResponse,
     MemoryExtractionResponse,
     MentionExtractionResponse,
-    RouterResponse,
+    ReflectionResponse,
     strict_response_format,
     strict_responses_text_format,
 )
 
 
 def test_strict_response_format_uses_json_schema() -> None:
-    response_format = strict_response_format(RouterResponse, name="route")
+    response_format = strict_response_format(ReflectionResponse, name="reflection")
 
     assert response_format["type"] == "json_schema"
     schema = response_format["json_schema"]
     assert schema["strict"] is True
     assert schema["schema"]["additionalProperties"] is False
+    assert set(schema["schema"]["required"]) == set(schema["schema"]["properties"])
+    assert "default" not in json.dumps(schema["schema"])
     assert "maxLength" not in json.dumps(schema["schema"])
 
 
 def test_strict_responses_text_format_uses_responses_shape() -> None:
-    response_format = strict_responses_text_format(RouterResponse, name="route")
+    response_format = strict_responses_text_format(ReflectionResponse, name="reflection")
 
     assert response_format["format"]["type"] == "json_schema"
     assert response_format["format"]["strict"] is True
@@ -34,14 +36,27 @@ def test_strict_responses_text_format_uses_responses_shape() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"intent": "unsupported", "args": []},
-        {"intent": "research", "args": [], "extra": True},
-        {"intent": "research", "args": "NVDA"},
+        {"verdict": "retry", "reason": "x", "corrected_agent": "news"},
+        {"verdict": "retry", "reason": "x", "extra": True},
     ],
 )
-def test_router_response_rejects_invalid_contract(payload: dict) -> None:
+def test_reflection_response_rejects_invalid_contract(payload: dict) -> None:
     with pytest.raises(ValidationError):
-        RouterResponse.model_validate_json(json.dumps(payload))
+        ReflectionResponse.model_validate_json(json.dumps(payload))
+
+
+def test_reflection_response_accepts_agent_and_defaults() -> None:
+    response = ReflectionResponse.model_validate(
+        {
+            "verdict": "retry",
+            "reason": "wrong route",
+            "corrected_agent": "research",
+            "retry_hint": "use NVDA",
+        }
+    )
+    assert response.corrected_agent == "research"
+    defaulted = ReflectionResponse.model_validate({"verdict": "pass", "reason": "ok"})
+    assert defaulted.corrected_agent is None
 
 
 def test_market_impact_response_rejects_coerced_boolean_and_confidence() -> None:

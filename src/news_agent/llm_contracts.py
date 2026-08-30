@@ -1,22 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, TypeVar, get_args
+from typing import Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
-RoutableIntent = Literal[
-    "runtime",
-    "research",
-    "candidates",
-    "signals",
-    "sourcehealth",
-    "sourcepack",
-    "resources",
-    "general_chat",
-    "help",
-]
-ROUTABLE_INTENTS = frozenset(get_args(RoutableIntent))
+Agent = Literal["research", "runtime", "web_search", "news_admin", "memory_search"]
 
 MemoryCategory = Literal["preference", "profile", "constraint", "other"]
 
@@ -25,16 +14,11 @@ class StrictResponseModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-class RouterResponse(StrictResponseModel):
-    intent: RoutableIntent
-    args: list[str]
-
-
 class ReflectionResponse(StrictResponseModel):
     verdict: Literal["pass", "retry", "fail"]
-    reason: str = Field(max_length=500)
-    corrected_intent: RoutableIntent | None
-    corrected_args: list[str]
+    reason: str
+    corrected_agent: Agent | None = None
+    retry_hint: str = ""
 
 
 class MarketImpactResponse(StrictResponseModel):
@@ -205,11 +189,15 @@ def strict_responses_text_format(
 
 def _openai_compatible_schema(value: object) -> object:
     if isinstance(value, dict):
-        return {
+        schema = {
             key: _openai_compatible_schema(item)
             for key, item in value.items()
-            if key not in {"minLength", "maxLength"}
+            if key not in {"default", "minLength", "maxLength"}
         }
+        properties = schema.get("properties")
+        if schema.get("type") == "object" and isinstance(properties, dict):
+            schema["required"] = list(properties)
+        return schema
     if isinstance(value, list):
         return [_openai_compatible_schema(item) for item in value]
     return value

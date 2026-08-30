@@ -43,7 +43,6 @@ Capability = Literal[
     "runtime_alerts",
     "skills",
     "help",
-    "general_search",
     "market_research",
 ]
 
@@ -74,14 +73,12 @@ class SupervisorState(TypedDict, total=False):
     intent: Intent
     requested_symbols: list[str]
     route: RouteState
-    pending_agents: list[AgentName]
-    completed_agents: list[AgentName]
     messages: Annotated[list[AnyMessage], add_messages]
     user_context: UserContext
     news_result: AgentResult
     runtime_result: AgentResult
     research_result: AgentResult
-    search_result: AgentResult
+    main_agent_result: AgentResult
     runtime_run_id: int
     active_step_id: int
     reflection_attempts: int

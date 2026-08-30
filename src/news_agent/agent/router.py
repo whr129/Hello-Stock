@@ -123,10 +123,6 @@ def route_request(
     return RouteDecision(agents=(), capabilities=(), fallback_response=help_response())
 
 
-def route_intent(intent: Intent) -> RouteDecision:
-    return route_request(intent)
-
-
 def extract_stock_symbols(text: str) -> list[str]:
     symbols = [
         match.group(1).upper()
