@@ -1,6 +1,25 @@
+x-service-defaults: &service-defaults
+  init: true
+  logging:
+    driver: json-file
+    options:
+      max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
+      max-file: "${DOCKER_LOG_MAX_FILES:-3}"
+
 services:
   postgres:
+    <<: *service-defaults
     image: pgvector/pgvector:pg16
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=40
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-news_agent}
       POSTGRES_USER: ${POSTGRES_USER:-news_agent}
@@ -18,8 +37,11 @@ services:
       retries: 10
     networks: [database]
     restart: unless-stopped
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-768m}
+    pids_limit: ${POSTGRES_PIDS_LIMIT:-200}
 
   migrate:
+    <<: *service-defaults
     build:
       context: .
     image: ${NEWS_AGENT_IMAGE:-news-agent:local}
@@ -35,8 +57,11 @@ services:
     profiles: ["app"]
     networks: [database]
     restart: "no"
+    mem_limit: ${MIGRATE_MEMORY_LIMIT:-512m}
+    pids_limit: ${MIGRATE_PIDS_LIMIT:-128}
 
   bot:
+    <<: *service-defaults
     build:
       context: .
     image: ${NEWS_AGENT_IMAGE:-news-agent:local}
@@ -52,8 +77,11 @@ services:
     profiles: ["app"]
     networks: [default, database]
     restart: unless-stopped
+    mem_limit: ${BOT_MEMORY_LIMIT:-640m}
+    pids_limit: ${BOT_PIDS_LIMIT:-256}
 
   scheduler:
+    <<: *service-defaults
     build:
       context: .
     image: ${NEWS_AGENT_IMAGE:-news-agent:local}
@@ -69,6 +97,8 @@ services:
     profiles: ["app"]
     networks: [default, database]
     restart: unless-stopped
+    mem_limit: ${SCHEDULER_MEMORY_LIMIT:-1024m}
+    pids_limit: ${SCHEDULER_PIDS_LIMIT:-384}
 
 volumes:
   postgres-data:

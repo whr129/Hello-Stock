@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: publish-container-${{ github.ref }}
@@ -20,12 +19,17 @@ jobs:
   ci:
     name: Validate source
     uses: ./.github/workflows/ci.yml
+    with:
+      skip-container-build: true
 
   publish:
     name: Publish GHCR image
     needs: ci
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
     outputs:
       digest: ${{ steps.publish.outputs.digest }}
       image: ${{ steps.image.outputs.name }}
@@ -58,6 +62,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
@@ -67,49 +72,47 @@ jobs:
           sbom: true
 
   deploy:
-    name: Deploy application and database server
+    name: Deploy production
     needs: publish
-    if: github.ref == 'refs/heads/main' && vars.ENABLE_PRODUCTION_DEPLOY == 'true'
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     environment: production
+    permissions:
+      contents: read
     env:
       DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
       DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
       DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
-      NEWS_AGENT_IMAGE: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
+      IMAGE_REF: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
     steps:
-      - name: Check out repository
+      - name: Check out deployment files
         uses: actions/checkout@v6
-      - name: Validate deployment configuration
-        shell: bash
-        run: |
-          test -n "$DEPLOY_HOST"
-          test -n "$DEPLOY_PORT"
-          test -n "$DEPLOY_USER"
-          test -n "$DEPLOY_SSH_PRIVATE_KEY"
-          test -n "$DEPLOY_SSH_KNOWN_HOSTS"
-          test -n "$NEWS_AGENT_IMAGE"
       - name: Configure SSH
         shell: bash
         run: |
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts"
       - name: Upload deployment files
         shell: bash
         run: |
-          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p ~/news-agent/scripts"
-          scp -P "$DEPLOY_PORT" docker-compose.yml \
-            "$DEPLOY_USER@$DEPLOY_HOST:news-agent/docker-compose.yml"
-          scp -P "$DEPLOY_PORT" scripts/backup-database.sh \
-            "$DEPLOY_USER@$DEPLOY_HOST:news-agent/scripts/backup-database.sh"
+          ssh -i "$HOME/.ssh/deploy_key" -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            'install -d -m 700 "$HOME/news-agent" "$HOME/news-agent/scripts"'
+          scp -i "$HOME/.ssh/deploy_key" -P "$DEPLOY_PORT" \
+            docker-compose.yml scripts/backup-database.sh scripts/deploy-production.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:news-agent/"
+          ssh -i "$HOME/.ssh/deploy_key" -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            'mv "$HOME/news-agent/backup-database.sh" "$HOME/news-agent/deploy-production.sh" "$HOME/news-agent/scripts/"'
       - name: Deploy immutable image
         shell: bash
         run: |
-          remote_image=$(printf '%q' "$NEWS_AGENT_IMAGE")
-          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd ~/news-agent && chmod 700 scripts/backup-database.sh && NEWS_AGENT_IMAGE=$remote_image docker compose --profile app pull && NEWS_AGENT_IMAGE=$remote_image docker compose --profile app up -d --no-build --remove-orphans && docker compose --profile app ps"
+          printf '%s\n' "$IMAGE_REF" | \
+            ssh -i "$HOME/.ssh/deploy_key" -p "$DEPLOY_PORT" \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              'read -r image_ref && cd "$HOME/news-agent" && NEWS_AGENT_IMAGE="$image_ref" bash scripts/deploy-production.sh'

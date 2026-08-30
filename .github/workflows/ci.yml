@@ -3,10 +3,16 @@ name: CI
 on:
   push:
     branches:
-      - main
+      - "agent/**"
       - "codex/**"
   pull_request:
   workflow_call:
+    inputs:
+      skip-container-build:
+        description: Skip the preliminary image build when the caller publishes the image.
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -33,10 +39,7 @@ jobs:
       - name: Install development dependencies
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
       - name: Run Ruff
-        # Main currently has historical line-length/import-order debt. Keep new
-        # CI blocking on syntax and correctness errors without widening this PR
-        # into a repository-wide formatting rewrite.
-        run: ruff check . --select E4,E7,E9,F --ignore F401
+        run: ruff check .
 
   test:
     name: Tests (Python ${{ matrix.python-version }})
@@ -82,6 +85,7 @@ jobs:
 
   container:
     name: Container build
+    if: ${{ !inputs.skip-container-build }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -93,6 +97,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64
           push: false
           tags: news-agent:ci
           cache-from: type=gha
