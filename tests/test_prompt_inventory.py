@@ -1,4 +1,4 @@
-from news_agent.agent.intent import ROUTER_SYSTEM_PROMPT
+from news_agent.agent.main_agent import MAIN_AGENT_SYSTEM_PROMPT
 from news_agent.agent.reflection import REFLECTION_PROMPT
 from news_agent.evaluation.runner import JUDGE_PROMPT
 from news_agent.ingestion.market_impact import MARKET_IMPACT_PROMPT
@@ -7,14 +7,14 @@ from news_agent.memory.consolidation import (
     EXTRACTION_PROMPT,
     TURN_EXTRACTION_PROMPT,
 )
+from news_agent.research.agents import RESEARCH_SYNTHESIS_PROMPT
 from news_agent.research.extraction import MENTION_EXTRACTION_PROMPT
-from news_agent.search.service import GENERAL_SEARCH_PROMPT
 from news_agent.summarizer.service import ARTICLE_SUMMARY_PROMPT, Summarizer
 
 ACTIVE_PROMPTS = (
-    ROUTER_SYSTEM_PROMPT,
+    MAIN_AGENT_SYSTEM_PROMPT,
     REFLECTION_PROMPT,
-    GENERAL_SEARCH_PROMPT,
+    RESEARCH_SYNTHESIS_PROMPT,
     ARTICLE_SUMMARY_PROMPT,
     MARKET_IMPACT_PROMPT,
     MENTION_EXTRACTION_PROMPT,

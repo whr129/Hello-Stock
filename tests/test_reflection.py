@@ -10,50 +10,64 @@ from news_agent.agent.reflection import (
 from news_agent.settings import Settings
 
 
-def test_reflection_payload_retry_requires_supported_intent() -> None:
+def test_reflection_payload_rejects_unknown_agent() -> None:
     decision = _decision_from_payload(
         {
             "verdict": "retry",
             "reason": "bad route",
-            "corrected_intent": "unsupported",
-            "corrected_args": ["AAPL"],
+            "corrected_agent": "news",
         }
     )
 
-    assert decision.verdict == "pass"
-    assert decision.corrected_intent is None
+    assert decision.verdict == "retry"
+    assert decision.corrected_agent is None
 
 
-def test_reflection_payload_normalizes_retry_args() -> None:
+def test_reflection_payload_keeps_agent_and_hint() -> None:
     decision = _decision_from_payload(
         {
             "verdict": "retry",
             "reason": "research request used search",
-            "corrected_intent": "research",
-            "corrected_args": ["aapl", "AAPL", " nvda "],
+            "corrected_agent": "research",
+            "retry_hint": "use NVDA",
         }
     )
 
     assert decision == ReflectionDecision(
         verdict="retry",
         reason="research request used search",
-        corrected_intent="research",
-        corrected_args=["AAPL", "NVDA"],
+        corrected_agent="research",
+        retry_hint="use NVDA",
     )
 
 
-def test_reflection_supports_source_health_correction() -> None:
+def test_reflection_truncates_retry_hint() -> None:
     decision = _decision_from_payload(
         {
             "verdict": "retry",
-            "reason": "source health request used general search",
-            "corrected_intent": "sourcehealth",
-            "corrected_args": [],
+            "reason": "weak answer",
+            "corrected_agent": "web_search",
+            "retry_hint": "x" * 600,
         }
     )
 
     assert decision.verdict == "retry"
-    assert decision.corrected_intent == "sourcehealth"
+    assert decision.corrected_agent == "web_search"
+    assert len(decision.retry_hint) == 500
+
+
+def test_reflection_truncates_long_reason() -> None:
+    decision = _decision_from_payload(
+        {
+            "verdict": "retry",
+            "reason": "x" * 600,
+            "corrected_agent": "memory_search",
+            "retry_hint": "search memory",
+        }
+    )
+
+    assert decision.verdict == "retry"
+    assert len(decision.reason) == 500
 
 
 @pytest.mark.asyncio

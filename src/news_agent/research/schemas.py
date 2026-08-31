@@ -186,13 +186,3 @@ class CompanyResearchPacket:
     evidence: list[ResearchWebEvidence] = field(default_factory=list)
     confidence: float = 0.0
     errors: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class MarketContext:
-    articles: list[object] = field(default_factory=list)
-    summaries: list[object] = field(default_factory=list)
-    mentions: list[object] = field(default_factory=list)
-    signal_snapshots: list[object] = field(default_factory=list)
-    market_snapshots: list[object] = field(default_factory=list)
-    theme_memories: list[object] = field(default_factory=list)

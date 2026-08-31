@@ -19,7 +19,7 @@ DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG: str = (
     '"defense spending":["defense","missile","military contract","geopolitical"]}'
 )
 DEFAULT_MARKET_ENTITY_ALIASES_JSON: str = (
-    '{"NVDA":["nvidia","nvidia corp","nvidia corporation"],'
+    '{"NVDA":["nvidia","nvidia corp","nvidia corporation","英伟达"],'
     '"AMD":["amd","advanced micro devices"],'
     '"MU":["micron","micron technology"],'
     '"MSFT":["microsoft"],'
@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     general_search_model: str = Field(default="", alias="GENERAL_SEARCH_MODEL")
     general_search_max_sources: int = Field(default=5, alias="GENERAL_SEARCH_MAX_SOURCES")
     general_search_timeout_seconds: int = Field(default=30, alias="GENERAL_SEARCH_TIMEOUT_SECONDS")
+    main_agent_model: str = Field(default="", alias="MAIN_AGENT_MODEL")
+    main_agent_max_tool_iterations: int = Field(
+        default=5,
+        alias="MAIN_AGENT_MAX_TOOL_ITERATIONS",
+    )
     research_web_enabled: bool = Field(default=False, alias="RESEARCH_WEB_ENABLED")
     research_web_model: str = Field(default="", alias="RESEARCH_WEB_MODEL")
     research_web_max_companies: int = Field(default=3, alias="RESEARCH_WEB_MAX_COMPANIES")

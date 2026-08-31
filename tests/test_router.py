@@ -30,6 +30,14 @@ def test_extract_explicit_ticker_stock_price() -> None:
     assert args == ["GOOG"]
 
 
+def test_extract_stock_symbols_rejects_common_non_tickers() -> None:
+    from news_agent.agent.router import extract_stock_symbols
+
+    args = extract_stock_symbols("Research AI CEO CPA HBM THIS and I")
+
+    assert args == []
+
+
 def test_parse_general_chat_intent() -> None:
     _, _, intent = parse_message("hello how are you")
 
@@ -166,3 +174,12 @@ def test_route_runtime_like_general_chat_to_runtime_agent() -> None:
 
     assert route.agents == ("runtime",)
     assert route.capabilities == ("runtime_inspection",)
+
+
+def test_route_latest_failed_refresh_to_runtime_agent() -> None:
+    route = route_request(
+        "general_chat",
+        message_text="What failed in the latest market research refresh?",
+    )
+
+    assert route.agents == ("runtime",)

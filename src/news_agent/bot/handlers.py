@@ -57,6 +57,7 @@ def register_handlers(application: Application) -> None:
     for command in commands:
         application.add_handler(CommandHandler(command, handle_message))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.COMMAND, handle_message))
 
 
 def split_telegram_message(text: str) -> list[str]:
