@@ -19,7 +19,7 @@ DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG: str = (
     '"defense spending":["defense","missile","military contract","geopolitical"]}'
 )
 DEFAULT_MARKET_ENTITY_ALIASES_JSON: str = (
-    '{"NVDA":["nvidia","nvidia corp","nvidia corporation"],'
+    '{"NVDA":["nvidia","nvidia corp","nvidia corporation","英伟达"],'
     '"AMD":["amd","advanced micro devices"],'
     '"MU":["micron","micron technology"],'
     '"MSFT":["microsoft"],'

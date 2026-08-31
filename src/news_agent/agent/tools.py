@@ -108,9 +108,11 @@ def _web_search_execute(search_service: GeneralSearchService) -> ToolExecutor:
 
 def _research_execute(research_agent: Any) -> ToolExecutor:
     async def execute(query: str, tickers: list[str] | None = None) -> str:
+        normalized_tickers = [item.upper() for item in (tickers or [])]
+        command = "/signals" if len(normalized_tickers) == 1 else "/research"
         state = {
-            "command": "/research",
-            "args": [item.upper() for item in (tickers or [])],
+            "command": command,
+            "args": normalized_tickers,
             "message_text": query,
         }
         return (await research_agent.run(state))["response"]

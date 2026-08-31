@@ -137,6 +137,7 @@ def test_candidate_report_does_not_print_unchecked_or_failed_urls_as_links() -> 
     assert "https://example.com/failed" not in text
     assert "link not checked yet" in text
     assert "link unavailable after validation" in text
+    assert text.count("Why it matters:") == 2
 
 
 def test_signal_report_includes_weak_evidence_and_guardrail() -> None:

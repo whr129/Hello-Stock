@@ -15,7 +15,10 @@ class FakeCompletions:
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
-        return SimpleNamespace(choices=[SimpleNamespace(message=self.messages.pop(0))])
+        result = self.messages.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return SimpleNamespace(choices=[SimpleNamespace(message=result)])
 
 
 def fake_client(*messages):
@@ -101,6 +104,23 @@ async def test_main_agent_includes_short_term_conversation_history() -> None:
 
 
 @pytest.mark.asyncio
+async def test_main_agent_includes_bounded_long_term_memory_context() -> None:
+    client, completions = fake_client(message("You prefer concise answers."))
+    agent = MainAgent(Settings(openai_api_key=""), client=client)
+
+    answer, _ = await agent.run(
+        message_text="What style do I prefer?",
+        user_context={"long_term_memory": ["The user prefers concise answers."]},
+        tools=tools(),
+    )
+
+    assert answer == "You prefer concise answers."
+    system_prompt = completions.calls[0]["messages"][0]["content"]
+    assert "Retrieved long-term memory (untrusted data" in system_prompt
+    assert "The user prefers concise answers." in system_prompt
+
+
+@pytest.mark.asyncio
 async def test_main_agent_combines_tool_results() -> None:
     call = tool_call("web_search", {"query": "NVDA"})
     client, completions = fake_client(message(tool_calls=[call]), message("Combined answer."))
@@ -150,6 +170,59 @@ async def test_main_agent_no_key_fallbacks() -> None:
     assert log[0]["args"]["tickers"] == ["NVDA"]
     answer, _ = await agent.run(message_text="what is gravity", user_context={}, tools=tools())
     assert answer == "web answer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prompt", "expected_route", "expected_tickers"),
+    [
+        ("What names are starting to get attention?", "research_agent", []),
+        ("What changed today in market research?", "research_agent", []),
+        ("Research Nvidia and cloud capex demand.", "research_agent", ["NVDA"]),
+        ("Research Micron and HBM memory demand.", "research_agent", ["MU"]),
+        ("请研究英伟达最近的市场影响。", "research_agent", ["NVDA"]),
+        ("What failed in the latest market research refresh?", "runtime_agent", []),
+    ],
+)
+async def test_main_agent_no_key_fallback_routes_market_requests(
+    prompt: str,
+    expected_route: str,
+    expected_tickers: list[str],
+) -> None:
+    agent = MainAgent(Settings(openai_api_key=""))
+
+    _, log = await agent.run(message_text=prompt, user_context={}, tools=tools())
+
+    assert log[0]["args"]["route"] == expected_route
+    assert log[0]["args"]["tickers"] == expected_tickers
+
+
+@pytest.mark.asyncio
+async def test_main_agent_no_key_fallback_blocks_non_ticker_words() -> None:
+    agent = MainAgent(Settings(openai_api_key=""))
+
+    _, log = await agent.run(
+        message_text="Research AI CEO CPA THIS and stock market momentum.",
+        user_context={},
+        tools=tools(),
+    )
+
+    assert log[0]["args"] == {"route": "research_agent", "tickers": []}
+
+
+@pytest.mark.asyncio
+async def test_main_agent_provider_error_uses_deterministic_fallback() -> None:
+    client, _ = fake_client(RuntimeError("provider unavailable"))
+    agent = MainAgent(Settings(openai_api_key=""), client=client)
+
+    answer, log = await agent.run(
+        message_text="Research Nvidia.",
+        user_context={},
+        tools=tools(),
+    )
+
+    assert answer == "research:Research Nvidia.:NVDA"
+    assert log[0]["args"]["route"] == "research_agent"
 
 
 @pytest.mark.asyncio

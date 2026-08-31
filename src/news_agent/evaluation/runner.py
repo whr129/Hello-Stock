@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 from openai import APIError, AsyncOpenAI
 from pydantic import ValidationError
 
+from news_agent.agent.router import extract_stock_symbols
 from news_agent.graph.chat_graph import build_chat_graph
 from news_agent.llm_contracts import JudgeResponse, strict_response_format
 from news_agent.settings import Settings, get_settings
@@ -194,9 +196,15 @@ def _deterministic_judgment(case: EvalCase, answer: str) -> dict[str, Any]:
     has_safety_text = "not financial advice" in lowered or "financial advice" in lowered
     if expects_safety and not has_safety_text:
         tags.append("missing_safety")
-    if "evidence" in expected and "evidence" not in lowered:
+    has_runtime_evidence = "uses the runtime path" in expected and (
+        "runtime" in lowered or re.search(r"\brun\s+\d+", lowered) is not None
+    )
+    if "evidence" in expected and "evidence" not in lowered and not has_runtime_evidence:
         tags.append("no_evidence")
-    allows_unavailable_links = "labeled unavailable" in expected or "label unavailable" in expected
+    allows_unavailable_links = any(
+        phrase in expected
+        for phrase in ("labeled unavailable", "label unavailable", "when available")
+    )
     if (
         "working link" in expected
         and "link unavailable" in lowered
@@ -221,6 +229,33 @@ def _deterministic_judgment(case: EvalCase, answer: str) -> dict[str, Any]:
         tags.append("missing_links")
     if any(fake in answer.split() for fake in ("A", "V", "THIS")):
         tags.append("wrong_ticker")
+    required_tickers = _required_tickers(case)
+    answer_symbols = set(re.findall(r"\b[A-Z]{2,5}\b", answer))
+    if required_tickers and not required_tickers.intersection(answer_symbols):
+        tags.append("wrong_ticker")
+    expects_routed_answer = any(
+        phrase in expected
+        for phrase in (
+            "uses the market research path",
+            "uses research path",
+            "uses signals path",
+            "uses candidates path",
+            "uses the runtime path",
+            "runs the market research path",
+        )
+    )
+    if expects_routed_answer and "general web search is unavailable" in lowered:
+        tags.append("not_useful_research")
+    if "asks for clarification" in expected and not any(
+        phrase in lowered
+        for phrase in ("clarify", "specify", "no supported symbol", "could not identify")
+    ):
+        tags.append("not_useful_research")
+    if case.id == "removed_watchlist" and not any(
+        phrase in lowered for phrase in ("unsupported", "not supported", "cannot create")
+    ):
+        tags.append("not_useful_research")
+    tags = list(dict.fromkeys(tags))
     passed = not tags
     score = 4 if passed else 2
     return {
@@ -270,6 +305,17 @@ def _candidate_count(answer: str) -> int:
     return sum(1 for line in answer.splitlines() if line[:3] in prefixes)
 
 
+def _required_tickers(case: EvalCase) -> set[str]:
+    tickers = set(extract_stock_symbols(case.prompt))
+    mapped = re.findall(
+        r"\bmaps?\s+.+?\s+to\s+([A-Z]{2,5})\b",
+        case.expected,
+        flags=re.IGNORECASE,
+    )
+    tickers.update(item.upper() for item in mapped)
+    return tickers
+
+
 def _markdown_report(
     results: list[dict[str, Any]],
     evaluation_metadata: dict[str, str],
@@ -296,9 +342,15 @@ def _markdown_report(
         f"- Average grounding: {averages.get('grounding', 0):.2f}",
         f"- Average usefulness: {averages.get('usefulness', 0):.2f}",
         f"- Next improvement target: {next_target}",
-        "",
-        "## Cases",
     ]
+    if evaluation_metadata["mode"] != "live_llm":
+        lines.extend(
+            [
+                "- Contract-only result: deterministic fallback validates answer shape; "
+                "it is not a live model-quality score.",
+            ]
+        )
+    lines.extend(["", "## Cases"])
     for result in results:
         judgment = result["judgment"]
         status = "PASS" if judgment.get("pass") else "FAIL"

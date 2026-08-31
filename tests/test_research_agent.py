@@ -142,6 +142,89 @@ async def test_research_agent_llm_loop_feeds_web_enrichment(monkeypatch) -> None
     assert result["metadata"]["research_web_llm_packet_count"] == 1
 
 
+def test_research_llm_is_disabled_when_web_research_is_disabled() -> None:
+    agent = ResearchSubagent(
+        session_factory=None,
+        settings=Settings(openai_api_key="test", research_web_enabled=False),
+    )
+
+    assert agent.research_llm_client is None
+
+
+@pytest.mark.asyncio
+async def test_research_llm_failure_preserves_deterministic_report(monkeypatch) -> None:
+    class FailingCompletions:
+        async def create(self, **kwargs):
+            del kwargs
+            raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(agents, "MarketSignalRepository", _FakeMarketSignalRepository)
+    agent = ResearchSubagent(
+        session_factory=_FakeSessionFactory(),
+        settings=Settings(openai_api_key="test", research_web_enabled=True),
+    )
+    agent.research_llm_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FailingCompletions())
+    )
+
+    result = await agent.run(
+        {"command": "/candidates", "args": [], "message_text": "/candidates"}
+    )
+
+    assert "No market attention candidates are available yet" in result["response"]
+    assert result["metadata"]["research_llm_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_company_web_tool_returns_packets_without_shared_state() -> None:
+    packet = SimpleNamespace(
+        ticker="NVDA",
+        status="complete",
+        overview="NVIDIA designs accelerated-computing platforms.",
+        financial_facts=[],
+        developments=[],
+        catalysts=[],
+        risks=[],
+        contradictions=[],
+        missing_checks=[],
+        evidence=[
+            SimpleNamespace(
+                title="NVIDIA filing",
+                url="https://example.com/filing",
+                summary="Primary filing evidence.",
+            )
+        ],
+    )
+
+    class FakeCoordinator:
+        async def research_many(self, candidates, *, query, horizon):
+            del candidates, query, horizon
+            return [packet]
+
+    agent = ResearchSubagent(
+        session_factory=_FakeSessionFactory(),
+        settings=Settings(openai_api_key=""),
+    )
+    agent.company_research = FakeCoordinator()
+    plan = SimpleNamespace(
+        entities=SimpleNamespace(tickers=[]),
+        query="NVIDIA",
+        research_horizon="7d",
+    )
+
+    content, packets = await agent._run_research_tool(
+        "company_web_research",
+        {"companies": [{"ticker": "NVDA"}]},
+        plan,
+        {"message_text": "NVIDIA"},
+    )
+
+    assert packets == [packet]
+    assert "NVIDIA designs accelerated-computing platforms" in content
+    assert "Primary filing evidence" in content
+    assert not hasattr(agent, "_last_packets")
+
+
 class _FakeSessionFactory:
     def __call__(self):
         return _FakeSession()

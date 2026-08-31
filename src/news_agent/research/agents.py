@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 
 from openai import AsyncOpenAI
@@ -51,6 +52,8 @@ Stored evidence:
 Web research:
 {web_research}
 """
+
+logger = logging.getLogger(__name__)
 
 RESEARCH_TOOL_SCHEMAS = [
     {
@@ -125,12 +128,13 @@ class ResearchSubagent:
         self.trace_service = RuntimeTraceService(session_factory, settings)
         self.company_research = CompanyResearchCoordinator(settings)
         self.research_llm_client = (
-            AsyncOpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
+            AsyncOpenAI(api_key=settings.openai_api_key)
+            if settings.research_web_enabled and settings.openai_api_key
+            else None
         )
         self.research_llm_model = settings.research_web_model or settings.openai_model
         self.general_search_service = GeneralSearchService(settings)
         self.embedding_service = EmbeddingService(settings)
-        self._last_packets: list[CompanyResearchPacket] = []
 
     async def run(self, state: SupervisorState) -> AgentResult:
         plan = self.planner.plan(
@@ -309,9 +313,12 @@ class ResearchSubagent:
             plan.task_type in {"deep_research", "candidate_ranking"}
             and self.research_llm_client is not None
         ):
-            web_packets, llm_search_results, stored_evidence_text = (
-                await self._run_research_tool_loop(plan, query_text, state)
-            )
+            try:
+                web_packets, llm_search_results, stored_evidence_text = (
+                    await self._run_research_tool_loop(plan, query_text, state)
+                )
+            except Exception:
+                logger.exception("optional research LLM planning failed")
 
         if web_packets:
             enrichment_candidates = self._enrichment_candidates(
@@ -458,9 +465,14 @@ class ResearchSubagent:
                     args = json.loads(call.function.arguments or "{}")
                 except json.JSONDecodeError:
                     args = {}
-                content = await self._run_research_tool(call.function.name, args, plan, state)
+                content, packets = await self._run_research_tool(
+                    call.function.name,
+                    args,
+                    plan,
+                    state,
+                )
                 if call.function.name == "company_web_research":
-                    company_packets.extend(self._packets_from_tool_result(content))
+                    company_packets.extend(packets)
                 elif call.function.name == "general_web_search":
                     search_texts.append(content)
                 elif call.function.name in {"stored_signals", "stored_articles"}:
@@ -474,7 +486,7 @@ class ResearchSubagent:
         args: dict[str, object],
         plan,
         state: SupervisorState,
-    ) -> str:
+    ) -> tuple[str, list[CompanyResearchPacket]]:
         try:
             if name == "stored_signals":
                 tickers = [
@@ -493,9 +505,12 @@ class ResearchSubagent:
                         min_strong_sources=self.settings.signal_min_strong_evidence_sources,
                     )
                 )
-                return format_candidates(
-                    explanations,
-                    max_evidence_items=self.settings.research_report_max_evidence_items,
+                return (
+                    format_candidates(
+                        explanations,
+                        max_evidence_items=self.settings.research_report_max_evidence_items,
+                    ),
+                    [],
                 )
             if name == "stored_articles":
                 embedding = await self.embedding_service.embed_text(str(args.get("query", "")))
@@ -506,11 +521,16 @@ class ResearchSubagent:
                         ticker=str(args.get("ticker") or "") or None,
                     )
                 if not articles:
-                    return "No relevant stored articles were found."
-                return "\n\n".join(
-                    f"{article.title} ({article.published_at or article.created_at:%Y-%m-%d}):\n"
-                    f"{article.extracted_text or article.title}"
-                    for article in articles
+                    return "No relevant stored articles were found.", []
+                return (
+                    "\n\n".join(
+                        f"{article.title} "
+                        f"({(article.published_at or article.created_at):%Y-%m-%d})\n"
+                        f"URL: {article.url}\n"
+                        f"{(article.extracted_text or article.title)[:1200]}"
+                        for article in articles
+                    ),
+                    [],
                 )
             if name == "company_web_research":
                 selected = [
@@ -530,30 +550,50 @@ class ResearchSubagent:
                     )
                     for item in selected
                 ]
-                self._last_packets = await self.company_research.research_many(
+                packets = await self.company_research.research_many(
                     candidates,
                     query=str(plan.query or state.get("message_text", "")),
                     horizon=plan.research_horizon,
                 )
-                return "\n\n".join(self._packet_text(packet) for packet in self._last_packets)
+                return "\n\n".join(self._packet_text(packet) for packet in packets), packets
             if name == "general_web_search":
                 result = await self.general_search_service.search(
                     str(args.get("query", "")),
                     state.get("user_context", {}),
                 )
-                return result.answer
+                return result.answer, []
         except Exception as error:
-            return f"Tool '{name}' failed: {error}"
-        return f"Unknown tool '{name}'."
-
-    def _packets_from_tool_result(self, content: str) -> list[CompanyResearchPacket]:
-        del content
-        return self._last_packets
+            return f"Tool '{name}' failed: {error}", []
+        return f"Unknown tool '{name}'.", []
 
     @staticmethod
     def _packet_text(packet: CompanyResearchPacket) -> str:
         lines = [f"{packet.ticker}: {packet.status}"]
-        lines.extend(f"- {item.title}: {item.url}" for item in packet.evidence[:5])
+        overview = getattr(packet, "overview", "")
+        if overview:
+            lines.append(f"Overview: {overview}")
+        for fact in getattr(packet, "financial_facts", [])[:5]:
+            lines.append(
+                f"Financial fact: {fact.metric}={fact.value} {fact.unit or ''} "
+                f"for {fact.period_end}; evidence={','.join(fact.evidence_ids)}"
+            )
+        for label, claims in (
+            ("Development", getattr(packet, "developments", [])),
+            ("Catalyst", getattr(packet, "catalysts", [])),
+            ("Risk", getattr(packet, "risks", [])),
+            ("Contradiction", getattr(packet, "contradictions", [])),
+        ):
+            lines.extend(
+                f"{label}: {claim.text}; evidence={','.join(claim.evidence_ids)}"
+                for claim in claims[:5]
+            )
+        lines.extend(
+            f"- {item.title}: {item.url}\n  {getattr(item, 'summary', '')}"
+            for item in packet.evidence[:5]
+        )
+        missing_checks = getattr(packet, "missing_checks", [])
+        if missing_checks:
+            lines.append("Missing checks: " + "; ".join(missing_checks[:5]))
         return "\n".join(lines)
 
     @staticmethod

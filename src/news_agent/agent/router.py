@@ -35,7 +35,29 @@ COMMAND_INTENTS: dict[str, Intent] = {
 CASHTAG_PATTERN = re.compile(r"\$([A-Za-z]{1,5})(?:\b|$)")
 UPPERCASE_TICKER_PATTERN = re.compile(r"\b([A-Z]{1,5})\b")
 DIRECT_TICKER_PATTERN = re.compile(r"\b(?:for|of)\s+\$?([A-Za-z]{1,5})(?:\b|$)")
-NON_TICKER_WORDS = {"FOR", "MARKET", "PRICE", "QUOTE", "STOCK", "THE"}
+NON_TICKER_WORDS = {
+    "A",
+    "AI",
+    "CEO",
+    "CFO",
+    "CPA",
+    "ETF",
+    "FOR",
+    "GDP",
+    "HBM",
+    "I",
+    "IPO",
+    "LLC",
+    "MARKET",
+    "PRICE",
+    "QUOTE",
+    "SEC",
+    "STOCK",
+    "THE",
+    "THIS",
+    "USA",
+    "V",
+}
 
 
 @dataclass(frozen=True)
@@ -123,37 +145,44 @@ def route_request(
     return RouteDecision(agents=(), capabilities=(), fallback_response=help_response())
 
 
-def extract_stock_symbols(text: str) -> list[str]:
+def extract_stock_symbols(
+    text: str,
+    *,
+    blocked_words: set[str] | None = None,
+) -> list[str]:
+    blocked = NON_TICKER_WORDS | {
+        item.strip().upper() for item in (blocked_words or set()) if item.strip()
+    }
     symbols = [
         match.group(1).upper()
         for match in CASHTAG_PATTERN.finditer(text)
-        if _looks_like_ticker(match.group(1))
+        if _looks_like_ticker(match.group(1), blocked)
     ]
     symbols.extend(
         match.group(1).upper()
         for match in UPPERCASE_TICKER_PATTERN.finditer(text)
-        if _looks_like_ticker(match.group(1))
+        if _looks_like_ticker(match.group(1), blocked)
     )
     symbols.extend(
         match.group(1).upper()
         for match in DIRECT_TICKER_PATTERN.finditer(text)
-        if _looks_like_ticker(match.group(1))
+        if _looks_like_ticker(match.group(1), blocked)
     )
     return sorted(dict.fromkeys(symbols))
 
 
-def _looks_like_ticker(value: str) -> bool:
+def _looks_like_ticker(value: str, blocked_words: set[str]) -> bool:
     normalized = value.upper()
     return bool(
         normalized.isalpha()
         and 1 <= len(normalized) <= 5
-        and normalized not in NON_TICKER_WORDS
+        and normalized not in blocked_words
     )
 
 
 def _looks_like_runtime_query(message_text: str) -> bool:
     lowered = message_text.lower()
-    return any(
+    if any(
         phrase in lowered
         for phrase in (
             "last refresh",
@@ -168,4 +197,8 @@ def _looks_like_runtime_query(message_text: str) -> bool:
             "alert",
             "failed source",
         )
+    ):
+        return True
+    return "refresh" in lowered and any(
+        term in lowered for term in ("latest", "failed", "failure", "error")
     )

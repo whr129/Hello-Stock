@@ -65,3 +65,38 @@ async def test_main_agent_memory_search_tool(monkeypatch) -> None:
     assert result == "Relevant stored memory:\n- remembered fact"
     assert seen["query"] == "query"
     assert seen["user_id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_research_tool_uses_signal_route_for_one_ticker() -> None:
+    seen = {}
+
+    class FakeResearchAgent:
+        async def run(self, state):
+            seen.update(state)
+            return {"response": "signal result"}
+
+    execute = tool_module._research_execute(FakeResearchAgent())
+
+    result = await execute("Why is Nvidia ranked?", tickers=["nvda"])
+
+    assert result == "signal result"
+    assert seen["command"] == "/signals"
+    assert seen["args"] == ["NVDA"]
+
+
+@pytest.mark.asyncio
+async def test_research_tool_uses_research_route_without_tickers() -> None:
+    seen = {}
+
+    class FakeResearchAgent:
+        async def run(self, state):
+            seen.update(state)
+            return {"response": "research result"}
+
+    execute = tool_module._research_execute(FakeResearchAgent())
+
+    result = await execute("What changed today?", tickers=[])
+
+    assert result == "research result"
+    assert seen["command"] == "/research"
