@@ -18,6 +18,16 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # Alembic creates version_num as VARCHAR(32) by default, but this and later
+    # descriptive revision identifiers exceed that limit. Widen it before
+    # Alembic records this revision at the end of the migration.
+    op.alter_column(
+        "alembic_version",
+        "version_num",
+        existing_type=sa.String(length=32),
+        type_=sa.String(length=255),
+        existing_nullable=False,
+    )
     op.drop_index("ix_watched_tickers_symbol", table_name="watched_tickers")
     op.drop_table("watched_tickers")
     op.drop_table("preferences")

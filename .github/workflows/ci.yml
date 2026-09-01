@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "agent/**"
+      - "codex/**"
+  pull_request:
+  workflow_call:
+    inputs:
+      skip-container-build:
+        description: Skip the preliminary image build when the caller publishes the image.
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install development dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Run Ruff
+        run: ruff check .
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: news_agent
+          POSTGRES_USER: news_agent
+          POSTGRES_PASSWORD: news_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U news_agent -d news_agent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://news_agent:news_agent@localhost:5432/news_agent
+      OPENAI_API_KEY: ""
+      TELEGRAM_BOT_TOKEN: ""
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install development dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Validate database migrations
+        run: alembic upgrade head
+      - name: Run tests
+        run: pytest -q
+
+  container:
+    name: Container build
+    if: ${{ !inputs.skip-container-build }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build container without publishing
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          tags: news-agent:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
