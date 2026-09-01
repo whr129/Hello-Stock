@@ -18,72 +18,48 @@ class DummySupervisorNodes:
 
     async def classify_request(self, state):
         self.calls.append("classify_request")
-        return state
+        text = state.get("message_text", "")
+        command = text.split()[0] if text.startswith("/") else ""
+        return {**state, "command": command, "args": [], "intent": "general_chat"}
 
     async def route_request(self, state):
         self.calls.append("route_request")
-        requested_agents = (
-            ["news", "runtime"] if "mixed" in state.get("message_text", "") else ["news"]
+        agent = {"/sources": "news", "/runtime": "runtime", "/research": "research"}.get(
+            state.get("command")
         )
         return {
             **state,
-            "route": {"agents": requested_agents, "capabilities": []},
-            "pending_agents": requested_agents,
-            "completed_agents": [],
+            "route": {
+                "agents": [agent] if agent else [],
+                "capabilities": [],
+                "fallback_response": "help" if state.get("command") and agent is None else None,
+            },
         }
 
     async def run_news_agent(self, state):
         self.calls.append("run_news_agent")
-        pending = [agent for agent in state.get("pending_agents", []) if agent != "news"]
-        completed = list(state.get("completed_agents", [])) + ["news"]
-        return {
-            **state,
-            "news_result": {"response": "news response"},
-            "pending_agents": pending,
-            "completed_agents": completed,
-        }
-
-    async def run_general_search(self, state):
-        self.calls.append("run_general_search")
-        return {
-            **state,
-            "search_result": {"response": "search response"},
-        }
+        return self._response(state, "news", "news response")
 
     async def run_runtime_agent(self, state):
         self.calls.append("run_runtime_agent")
-        pending = [agent for agent in state.get("pending_agents", []) if agent != "runtime"]
-        completed = list(state.get("completed_agents", [])) + ["runtime"]
-        return {
-            **state,
-            "runtime_result": {"response": "runtime response"},
-            "pending_agents": pending,
-            "completed_agents": completed,
-        }
+        return self._response(state, "runtime", "runtime response")
 
     async def run_research_agent(self, state):
         self.calls.append("run_research_agent")
-        pending = [agent for agent in state.get("pending_agents", []) if agent != "research"]
-        completed = list(state.get("completed_agents", [])) + ["research"]
+        return self._response(state, "research", "research response")
+
+    async def run_main_agent(self, state):
+        self.calls.append("run_main_agent")
+        return self._response(state, "main_agent", "main agent response")
+
+    @staticmethod
+    def _response(state, name, response):
         return {
             **state,
-            "research_result": {"response": "research response"},
-            "pending_agents": pending,
-            "completed_agents": completed,
+            f"{name}_result": {"response": response},
+            "final_response": response,
+            "response": response,
         }
-
-    async def merge_agent_outputs(self, state):
-        self.calls.append("merge_agent_outputs")
-        parts = []
-        if state.get("news_result"):
-            parts.append(state["news_result"]["response"])
-        if state.get("runtime_result"):
-            parts.append(state["runtime_result"]["response"])
-        if state.get("research_result"):
-            parts.append(state["research_result"]["response"])
-        if state.get("search_result"):
-            parts.append(state["search_result"]["response"])
-        return {**state, "final_response": "\n\n".join(parts), "response": "\n\n".join(parts)}
 
     async def guardrail_check(self, state):
         self.calls.append("guardrail_check")
@@ -95,106 +71,51 @@ class DummySupervisorNodes:
 
     async def persist_session(self, state):
         self.calls.append("persist_session")
-        return {**state, "metadata": {"calls": self.calls}}
+        return {**state, "metadata": {**state.get("metadata", {}), "calls": self.calls}}
 
 
 @pytest.mark.asyncio
 async def test_chat_graph_runs_single_news_subagent(monkeypatch) -> None:
     monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", DummySupervisorNodes)
-
-    graph = build_chat_graph(session_factory=None, settings=Settings(openai_api_key=""))
-    result = await graph.ainvoke({"message_text": "news only"})
+    result = await build_chat_graph(None, Settings(openai_api_key="")).ainvoke(
+        {"message_text": "/sources"}
+    )
     calls = result["metadata"]["calls"]
-
     assert result["response"] == "news response"
     assert "run_news_agent" in calls
     assert "run_runtime_agent" not in calls
+    assert "run_main_agent" not in calls
     assert calls[-1] == "persist_session"
 
 
 @pytest.mark.asyncio
-async def test_chat_graph_runs_multiple_subagents_for_mixed_route(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "message",
+    ["who won the world series last year", "/brief"],
+)
+async def test_chat_graph_free_text_and_unknown_commands_use_main_agent(
+    monkeypatch, message
+) -> None:
     monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", DummySupervisorNodes)
-
-    graph = build_chat_graph(session_factory=None, settings=Settings(openai_api_key=""))
-    result = await graph.ainvoke({"message_text": "mixed route"})
-    calls = result["metadata"]["calls"]
-
-    assert result["response"] == "news response\n\nruntime response"
-    assert "run_news_agent" in calls
-    assert "run_runtime_agent" in calls
-
-
-@pytest.mark.asyncio
-async def test_chat_graph_runs_general_search_when_no_agents(monkeypatch) -> None:
-    class GeneralSearchNodes(DummySupervisorNodes):
-        async def route_request(self, state):
-            self.calls.append("route_request")
-            return {
-                **state,
-                "route": {"agents": [], "capabilities": ["general_search"]},
-                "pending_agents": [],
-                "completed_agents": [],
-            }
-
-    monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", GeneralSearchNodes)
-
-    graph = build_chat_graph(session_factory=None, settings=Settings(openai_api_key=""))
-    result = await graph.ainvoke({"message_text": "who won the world series last year"})
-    calls = result["metadata"]["calls"]
-
-    assert result["response"] == "search response"
-    assert "run_general_search" in calls
+    result = await build_chat_graph(None, Settings(openai_api_key="")).ainvoke(
+        {"message_text": message}
+    )
+    assert result["response"] == "main agent response"
+    assert "run_main_agent" in result["metadata"]["calls"]
 
 
 @pytest.mark.asyncio
 async def test_chat_graph_runs_runtime_agent_when_requested(monkeypatch) -> None:
-    class RuntimeNodes(DummySupervisorNodes):
-        async def route_request(self, state):
-            self.calls.append("route_request")
-            return {
-                **state,
-                "route": {"agents": ["runtime"], "capabilities": ["runtime_inspection"]},
-                "pending_agents": ["runtime"],
-                "completed_agents": [],
-            }
-
-    monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", RuntimeNodes)
-
-    graph = build_chat_graph(session_factory=None, settings=Settings(openai_api_key=""))
-    result = await graph.ainvoke({"message_text": "what happened in the last refresh"})
-    calls = result["metadata"]["calls"]
-
+    monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", DummySupervisorNodes)
+    result = await build_chat_graph(None, Settings(openai_api_key="")).ainvoke(
+        {"message_text": "/runtime"}
+    )
     assert result["response"] == "runtime response"
-    assert "run_runtime_agent" in calls
 
 
 @pytest.mark.asyncio
-async def test_chat_graph_reflection_retries_with_corrected_route(monkeypatch) -> None:
-    class ReflectionRetryNodes(DummySupervisorNodes):
-        async def classify_request(self, state):
-            self.calls.append("classify_request")
-            return {**state, "intent": "general_chat", "args": []}
-
-        async def route_request(self, state):
-            self.calls.append("route_request")
-            if state.get("intent") == "research":
-                return {
-                    **state,
-                    "route": {
-                        "agents": ["research"],
-                        "capabilities": ["market_research"],
-                    },
-                    "pending_agents": ["research"],
-                    "completed_agents": [],
-                }
-            return {
-                **state,
-                "route": {"agents": [], "capabilities": ["general_search"]},
-                "pending_agents": [],
-                "completed_agents": [],
-            }
-
+async def test_chat_graph_reflection_retries_with_corrected_agent(monkeypatch) -> None:
+    class RetryNodes(DummySupervisorNodes):
         async def reflect_result(self, state):
             self.calls.append("reflect_result")
             metadata = dict(state.get("metadata", {}))
@@ -203,65 +124,45 @@ async def test_chat_graph_reflection_retries_with_corrected_route(monkeypatch) -
                 metadata["reflection_retry"] = True
                 return {
                     **state,
-                    "intent": "research",
-                    "args": ["AAPL"],
-                    "requested_symbols": ["AAPL"],
-                    "route": {},
-                    "pending_agents": [],
-                    "completed_agents": [],
-                    "search_result": {},
+                    "command": "/research",
+                    "reflection_attempts": 1,
+                    "reflection_decision": {
+                        "corrected_agent": "research",
+                        "retry_hint": "use NVDA",
+                    },
+                    "metadata": metadata,
                     "final_response": "",
                     "response": "",
-                    "metadata": metadata,
-                    "reflection_attempts": 1,
                 }
             return {**state, "metadata": metadata}
 
-    monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", ReflectionRetryNodes)
-
-    graph = build_chat_graph(session_factory=None, settings=Settings(openai_api_key=""))
-    result = await graph.ainvoke({"message_text": "what is Apple doing today?"})
+    monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", RetryNodes)
+    result = await build_chat_graph(None, Settings(openai_api_key="")).ainvoke(
+        {"message_text": "what is NVDA doing?"}
+    )
     calls = result["metadata"]["calls"]
-
     assert result["response"] == "research response"
-    assert calls.count("route_request") == 2
-    assert "run_general_search" in calls
-    assert "run_research_agent" in calls
+    assert calls.count("route_request") == 1
+    assert "run_main_agent" in calls and "run_research_agent" in calls
 
 
 @pytest.mark.asyncio
 async def test_chat_graph_reflection_exhaustion_persists_note(monkeypatch) -> None:
-    class ReflectionExhaustedNodes(DummySupervisorNodes):
-        note = (
-            "Note: I could not confidently repair this answer after a reflection retry. "
-            "You may want to rephrase or use a direct command such as /research, /candidates, "
-            "or /runtime."
-        )
-
-        async def route_request(self, state):
-            self.calls.append("route_request")
-            return {
-                **state,
-                "route": {"agents": [], "capabilities": ["general_search"]},
-                "pending_agents": [],
-                "completed_agents": [],
-            }
-
+    class ExhaustedNodes(DummySupervisorNodes):
         async def reflect_result(self, state):
             self.calls.append("reflect_result")
+            note = "Note: I could not confidently repair this answer after a reflection retry."
+            response = f"{state.get('response', '')}\n\n{note}"
             return {
                 **state,
-                "final_response": (
-                    state.get("final_response", "") + "\n\n" + self.note
-                ).strip(),
-                "response": (state.get("response", "") + "\n\n" + self.note).strip(),
+                "response": response,
+                "final_response": response,
                 "reflection_exhausted": True,
             }
 
-    monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", ReflectionExhaustedNodes)
-
-    graph = build_chat_graph(session_factory=None, settings=Settings(openai_api_key=""))
-    result = await graph.ainvoke({"message_text": "bad route"})
-
+    monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", ExhaustedNodes)
+    result = await build_chat_graph(None, Settings(openai_api_key="")).ainvoke(
+        {"message_text": "bad route"}
+    )
     assert "could not confidently repair" in result["response"]
     assert result["reflection_exhausted"] is True

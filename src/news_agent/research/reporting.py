@@ -209,17 +209,20 @@ def _evidence_lines(evidence: list[dict[str, object]], *, limit: int) -> list[st
             if source:
                 label += f" - {source}"
             lines.append(f"- {label}: link unavailable after validation.")
+            lines.append(f"  Why it matters: {_evidence_reason(item, snippet)}")
         elif title and url:
             label = title
             if source:
                 label += f" - {source}"
             lines.append(f"- {label}: link not checked yet.")
+            lines.append(f"  Why it matters: {_evidence_reason(item, snippet)}")
         elif snippet:
             lines.append(f"- Stored evidence, link unavailable: {snippet}")
+            lines.append(f"  Why it matters: {_evidence_reason(item, snippet)}")
         else:
             lines.append("- Stored evidence, link unavailable.")
 
-        if snippet and title and url_status == "available":
+        if snippet and title:
             lines.append(f"  {snippet[:220]}")
 
     return lines or ["- Not enough stored evidence yet."]

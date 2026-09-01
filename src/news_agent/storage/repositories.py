@@ -375,6 +375,24 @@ class ArticleRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def semantic_search(
+        self,
+        *,
+        query_embedding: list[float],
+        limit: int = 5,
+        ticker: str | None = None,
+    ) -> list[Article]:
+        statement = (
+            select(Article)
+            .join(ArticleEmbedding, ArticleEmbedding.article_id == Article.id)
+            .order_by(ArticleEmbedding.embedding.cosine_distance(query_embedding))
+            .limit(limit)
+        )
+        if ticker:
+            statement = statement.where(Article.related_tickers.any(ticker.upper()))
+        result = await self.session.execute(statement)
+        return list(result.scalars().unique())
+
     async def upsert_article(
         self,
         *,
@@ -1430,6 +1448,20 @@ class MemoryRepository:
             .limit(limit)
         )
         return list(result.scalars())
+
+    async def semantic_search_text(
+        self,
+        *,
+        user_id: int,
+        query_embedding: list[float],
+        limit: int = 5,
+    ) -> list[str]:
+        rows = await self.semantic_search_for_user(
+            user_id=user_id,
+            query_embedding=query_embedding,
+            limit=limit,
+        )
+        return [memory.memory_text for memory in rows]
 
     async def remember(
         self,
