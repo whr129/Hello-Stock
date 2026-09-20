@@ -1,8 +1,13 @@
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from httpx import Request
+from openai import APIError
 
+from news_agent.memory import consolidation
 from news_agent.memory.consolidation import (
     CONSOLIDATION_PROMPT,
     MemoryCandidate,
@@ -40,6 +45,82 @@ class FakeClient:
         self.chat = SimpleNamespace(completions=FakeCompletions(payload))
 
 
+@pytest.fixture
+def memory_job(monkeypatch):
+    job = SimpleNamespace(id=1, user_id=7, source_start_event_id=10, source_end_event_id=20)
+    events = [ConversationEvent(user_id=7, chat_id=7, role="user", content="Call me Howard.")]
+    jobs = SimpleNamespace(
+        mark_running=AsyncMock(return_value=job),
+        get=AsyncMock(return_value=job),
+        mark_completed=AsyncMock(),
+        mark_failed=AsyncMock(),
+        has_active_job=AsyncMock(return_value=False),
+    )
+    users = SimpleNamespace(update_memory_cursor=AsyncMock())
+    event_repo = SimpleNamespace(
+        list_between_ids=AsyncMock(return_value=events),
+        list_oldest_unprocessed_user_events=AsyncMock(return_value=[]),
+    )
+
+    @asynccontextmanager
+    async def session_scope(_factory):
+        yield SimpleNamespace()
+
+    monkeypatch.setattr(consolidation, "session_scope", session_scope)
+    monkeypatch.setattr(consolidation, "MemoryConsolidationJobRepository", lambda session: jobs)
+    monkeypatch.setattr(consolidation, "ConversationEventRepository", lambda session: event_repo)
+    monkeypatch.setattr(consolidation, "UserRepository", lambda session, settings: users)
+    service = _service()
+    service.trace_service = SimpleNamespace(
+        ensure_run=AsyncMock(return_value=1),
+        start_step=AsyncMock(return_value=2),
+        finish_step=AsyncMock(),
+        finish_run=AsyncMock(),
+        record_error=AsyncMock(return_value=3),
+    )
+    service.alert_service = SimpleNamespace(send_alert=AsyncMock())
+    return service, jobs, users
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["api", "schema"])
+async def test_extraction_failure_retries_job_without_consuming_transcript(
+    memory_job, failure: str
+) -> None:
+    service, jobs, users = memory_job
+    service.client = FakeClient({"candidates": "invalid"})
+    if failure == "api":
+        service.client.chat.completions.create = AsyncMock(
+            side_effect=APIError(
+                "provider unavailable", Request("POST", "https://example.com"), body=None
+            )
+        )
+
+    await service._process_job(1)
+
+    jobs.mark_failed.assert_awaited_once()
+    assert jobs.mark_failed.await_args.args == (1,)
+    assert jobs.mark_failed.await_args.kwargs["error_message"]
+    assert (
+        jobs.mark_failed.await_args.kwargs["max_retries"]
+        == service.settings.memory_job_max_retries
+    )
+    users.update_memory_cursor.assert_not_awaited()
+    jobs.mark_completed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_successful_empty_extraction_completes_job_and_advances_cursor(memory_job) -> None:
+    service, jobs, users = memory_job
+    service.client = FakeClient({"candidates": []})
+
+    await service._process_job(1)
+
+    jobs.mark_completed.assert_awaited_once_with(1)
+    users.update_memory_cursor.assert_awaited_once_with(7, 20)
+    jobs.mark_failed.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_extract_candidates_without_llm_returns_empty() -> None:
     service = _service()
@@ -54,7 +135,7 @@ async def test_extract_candidates_without_llm_returns_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_extract_turn_candidates_uses_llm_schema() -> None:
+async def test_extract_candidates_uses_llm_schema() -> None:
     service = _service()
     fake_client = FakeClient(
         {
@@ -69,9 +150,11 @@ async def test_extract_turn_candidates_uses_llm_schema() -> None:
     )
     service.client = fake_client
 
-    candidates = await service.extract_turn_candidates(
-        user_message="ok call me Howard",
-        assistant_response="Got it, Howard.",
+    candidates = await service.extract_candidates(
+        [
+            ConversationEvent(user_id=1, chat_id=1, role="user", content="ok call me Howard"),
+            ConversationEvent(user_id=1, chat_id=1, role="assistant", content="Got it, Howard."),
+        ]
     )
 
     assert candidates == [
@@ -82,8 +165,12 @@ async def test_extract_turn_candidates_uses_llm_schema() -> None:
         )
     ]
     messages = fake_client.chat.completions.kwargs["messages"]
-    assert "Latest turn:" in messages[1]["content"]
-    assert "ok call me Howard" in messages[1]["content"]
+    assert "Transcript:" in messages[1]["content"]
+    assert "user: ok call me Howard" in messages[1]["content"]
+    assert "assistant: Got it, Howard." in messages[1]["content"]
+    response_format = fake_client.chat.completions.kwargs["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
 
 
 @pytest.mark.asyncio
@@ -95,7 +182,7 @@ async def test_extract_turn_candidates_uses_llm_schema() -> None:
         "User wants a technology watchlist.",
     ],
 )
-async def test_extract_turn_candidates_rejects_removed_or_sensitive_memory(
+async def test_extract_candidates_rejects_removed_or_sensitive_memory(
     memory_text: str,
 ) -> None:
     service = _service()
@@ -107,7 +194,9 @@ async def test_extract_turn_candidates_rejects_removed_or_sensitive_memory(
         }
     )
 
-    candidates = await service.extract_turn_candidates(user_message=memory_text)
+    candidates = await service.extract_candidates(
+        [ConversationEvent(user_id=1, chat_id=1, role="user", content=memory_text)]
+    )
 
     assert candidates == []
 
@@ -204,12 +293,11 @@ async def test_consolidate_candidate_rejects_memory_id_outside_supplied_pool() -
 
 
 def test_memory_prompts_exclude_removed_personalization_and_treat_data_as_untrusted() -> None:
-    from news_agent.memory.consolidation import EXTRACTION_PROMPT, TURN_EXTRACTION_PROMPT
+    from news_agent.memory.consolidation import EXTRACTION_PROMPT
 
-    combined = f"{EXTRACTION_PROMPT}\n{TURN_EXTRACTION_PROMPT}"
-    assert "local-news preferences" not in combined
-    assert "watch_habit" not in combined
-    assert "untrusted data" in combined
+    assert "local-news preferences" not in EXTRACTION_PROMPT
+    assert "watch_habit" not in EXTRACTION_PROMPT
+    assert "untrusted data" in EXTRACTION_PROMPT
 
 
 @pytest.mark.asyncio

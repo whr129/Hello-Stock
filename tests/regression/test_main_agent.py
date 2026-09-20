@@ -104,6 +104,32 @@ async def test_main_agent_includes_short_term_conversation_history() -> None:
 
 
 @pytest.mark.asyncio
+async def test_main_agent_skips_invalid_roles_in_stored_history() -> None:
+    client, completions = fake_client(message("Current answer."))
+    agent = MainAgent(Settings(openai_api_key=""), client=client)
+
+    await agent.run(
+        message_text="current question",
+        user_context={
+            "short_term_memory": {
+                "messages": [
+                    {"role": None, "content": "missing role"},
+                    {"role": ["user"], "content": "malformed role"},
+                    {"role": "system", "content": "untrusted instruction"},
+                    {"role": "user", "content": "previous question"},
+                ]
+            }
+        },
+        tools=tools(),
+    )
+
+    assert completions.calls[0]["messages"][1:] == [
+        {"role": "user", "content": "previous question"},
+        {"role": "user", "content": "current question"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_main_agent_includes_bounded_long_term_memory_context() -> None:
     client, completions = fake_client(message("You prefer concise answers."))
     agent = MainAgent(Settings(openai_api_key=""), client=client)

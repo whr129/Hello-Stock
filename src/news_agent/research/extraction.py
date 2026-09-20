@@ -140,7 +140,8 @@ class MentionExtractor:
         if not tickers and not themes:
             return []
 
-        for ticker in tickers or [None]:
+        ticker_values: list[str | None] = list(tickers) or [None]
+        for ticker in ticker_values:
             ticker_count = _ticker_count(clean_text, ticker) if ticker else 1
             if themes:
                 for theme in themes:
@@ -406,10 +407,6 @@ def sector_keywords_from_settings(settings: Settings | None = None) -> dict[str,
     return parsed
 
 
-def alias_tickers_from_settings(settings: Settings | None = None) -> dict[str, str]:
-    return _alias_map_from_settings(settings)
-
-
 def _parse_keyword_config(value: str) -> dict[str, tuple[str, ...]]:
     try:
         payload = json.loads(value or "{}")
@@ -454,14 +451,6 @@ def _alias_map_from_settings(settings: Settings | None = None) -> dict[str, str]
 
 def _csv_set(value: str) -> set[str]:
     return {item.strip().upper() for item in value.split(",") if item.strip()}
-
-
-def _coerce_confidence(value: object) -> float:
-    try:
-        confidence = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return max(0.0, min(1.0, confidence))
 
 
 def _evidence_snippet(text: str, limit: int = 220) -> str:

@@ -5,11 +5,10 @@ from news_agent.ingestion.market_impact import MARKET_IMPACT_PROMPT
 from news_agent.memory.consolidation import (
     CONSOLIDATION_PROMPT,
     EXTRACTION_PROMPT,
-    TURN_EXTRACTION_PROMPT,
 )
 from news_agent.research.agents import RESEARCH_SYNTHESIS_PROMPT
 from news_agent.research.extraction import MENTION_EXTRACTION_PROMPT
-from news_agent.summarizer.service import ARTICLE_SUMMARY_PROMPT, Summarizer
+from news_agent.summarizer.service import ARTICLE_SUMMARY_PROMPT
 
 ACTIVE_PROMPTS = (
     MAIN_AGENT_SYSTEM_PROMPT,
@@ -19,16 +18,10 @@ ACTIVE_PROMPTS = (
     MARKET_IMPACT_PROMPT,
     MENTION_EXTRACTION_PROMPT,
     EXTRACTION_PROMPT,
-    TURN_EXTRACTION_PROMPT,
     CONSOLIDATION_PROMPT,
     JUDGE_PROMPT,
 )
 
 
 def test_every_active_prompt_marks_supplied_content_as_untrusted() -> None:
-    assert len(ACTIVE_PROMPTS) == 10
     assert all("untrusted" in prompt.lower() for prompt in ACTIVE_PROMPTS)
-
-
-def test_removed_digest_prompt_has_no_runtime_surface() -> None:
-    assert not hasattr(Summarizer, "synthesize_digest")

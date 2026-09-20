@@ -66,9 +66,6 @@ class DummySchedulerNodes:
         state = self._step(state, "confidence_filter")
         return {**state, "metadata": {**state.get("metadata", {}), "confident_signal_count": 1}}
 
-    async def quality_check(self, state):
-        return self._step(state, "quality_check")
-
     async def cleanup_market_research(self, state):
         return self._step(state, "cleanup_market_research")
 
@@ -103,7 +100,6 @@ async def test_scheduler_graph_runs_all_nodes(monkeypatch) -> None:
         "evidence_backfill",
         "score_signals",
         "confidence_filter",
-        "quality_check",
         "cleanup_market_research",
         "retry_or_recover",
     ]

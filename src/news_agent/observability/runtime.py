@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -113,12 +114,6 @@ class RuntimeTraceService:
         async with self.session_factory() as session:
             await RuntimeRunRepository(session).finish(run_id, status=status, summary=summary)
             await session.commit()
-
-    async def update_run_metadata(self, run_id: int, metadata: dict[str, Any]) -> None:
-        async with self.session_factory() as session:
-            await RuntimeRunRepository(session).update_metadata(run_id, metadata)
-            await session.commit()
-
 
 class RuntimeAlertService:
     def __init__(self, session_factory: async_sessionmaker, settings: Settings) -> None:
@@ -309,7 +304,7 @@ def _source_health_text(source_metrics: dict[str, Any]) -> str:
     return ", ".join(f"{status} {count}" for status, count in sorted(counts.items()))
 
 
-def summarize_run_state(workflow: str, state: dict[str, Any]) -> str:
+def summarize_run_state(workflow: str, state: Mapping[str, Any]) -> str:
     errors = list(state.get("errors", []))
     if errors:
         return f"{workflow} completed with {len(errors)} error(s)"

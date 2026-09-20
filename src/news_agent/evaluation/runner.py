@@ -13,7 +13,7 @@ from openai import APIError, AsyncOpenAI
 from pydantic import ValidationError
 
 from news_agent.agent.router import extract_stock_symbols
-from news_agent.graph.chat_graph import build_chat_graph
+from news_agent.app.supervisor import build_supervisor_graph
 from news_agent.llm_contracts import JudgeResponse, strict_response_format
 from news_agent.settings import Settings, get_settings
 from news_agent.storage.database import create_session_factory
@@ -79,7 +79,7 @@ async def run_eval(case_path: Path, settings: Settings) -> tuple[Path, Path]:
     jsonl_path = output_dir / f"market_research_eval_{stamp}.jsonl"
     report_path = output_dir / f"market_research_eval_{stamp}.md"
 
-    graph = build_chat_graph(create_session_factory(settings), settings)
+    graph = build_supervisor_graph(create_session_factory(settings), settings)
     judge = _Judge(settings)
     evaluation_metadata = judge.metadata()
     results = []
@@ -408,7 +408,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run market research answer evals.")
     parser.add_argument(
         "--cases",
-        default="docs/market-research/evals/market_research_cases.jsonl",
+        default="tests/evaluation/market_research_cases.jsonl",
         help="JSONL eval case file.",
     )
     args = parser.parse_args()

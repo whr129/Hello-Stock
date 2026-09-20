@@ -46,9 +46,11 @@ async def extract_market_mentions(
             await repository.save(_to_model(mention))
             saved += 1
 
-    for summary, article, source in await repository.list_summaries_for_extraction(limit=limit):
-        related_tickers = article.related_tickers if article else []
-        source_family = article.category if article else "news"
+    for summary, summary_article, source in await repository.list_summaries_for_extraction(
+        limit=limit
+    ):
+        related_tickers = summary_article.related_tickers if summary_article else []
+        source_family = summary_article.category if summary_article else "news"
         trust_score = source.trust_score if source else 0.5
         for mention in await extractor.extract_async(
             text=summary.text,
@@ -57,7 +59,7 @@ async def extract_market_mentions(
             trust_score=trust_score,
             article_id=summary.article_id,
             summary_id=summary.id,
-            source_id=article.source_id if article else None,
+            source_id=summary_article.source_id if summary_article else None,
         ):
             await repository.save(_to_model(mention))
             saved += 1

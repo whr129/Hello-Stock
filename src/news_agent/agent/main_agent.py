@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 
 from news_agent.agent.router import extract_stock_symbols, route_request
 from news_agent.agent.tools import Tool
+from news_agent.app.state import UserContext
 from news_agent.settings import Settings
 
 MAIN_AGENT_SYSTEM_PROMPT = """You are the main assistant of a market-research Telegram bot.
@@ -59,7 +60,7 @@ class MainAgent:
         self,
         *,
         message_text: str,
-        user_context: dict[str, Any],
+        user_context: UserContext,
         tools: dict[str, Tool],
         retry_hint: str = "",
     ) -> tuple[str, list[dict[str, Any]]]:
@@ -150,7 +151,7 @@ class MainAgent:
         self,
         tool_call: Any,
         tools: dict[str, Tool],
-        user_context: dict[str, Any],
+        user_context: UserContext,
         log: list[dict[str, Any]],
     ) -> tuple[dict[str, Any], str]:
         name = tool_call.function.name
@@ -191,7 +192,7 @@ class MainAgent:
     async def _deterministic_fallback(
         self,
         message_text: str,
-        user_context: dict[str, Any],
+        user_context: UserContext,
         tools: dict[str, Tool],
     ) -> tuple[str, list[dict[str, Any]]]:
         blocked_words = {
@@ -243,7 +244,7 @@ class MainAgent:
 
 
 def _short_term_messages(
-    user_context: dict[str, Any],
+    user_context: UserContext,
     *,
     limit: int,
 ) -> list[dict[str, str]]:
@@ -260,6 +261,7 @@ def _short_term_messages(
     for item in stored_messages[-limit:]:
         if not isinstance(item, dict):
             continue
+        role: object
         message_type = item.get("type")
         data = item.get("data")
         if message_type in {"human", "ai"} and isinstance(data, dict):
@@ -268,7 +270,9 @@ def _short_term_messages(
         else:
             role = item.get("role")
             content = item.get("content", "")
-        if role not in {"user", "assistant"} or not isinstance(content, str):
+        if not isinstance(role, str) or role not in {"user", "assistant"}:
+            continue
+        if not isinstance(content, str):
             continue
         content = content.strip()
         if content:
@@ -276,7 +280,7 @@ def _short_term_messages(
     return messages
 
 
-def _long_term_memory_context(user_context: dict[str, Any]) -> str:
+def _long_term_memory_context(user_context: UserContext) -> str:
     memories = user_context.get("long_term_memory")
     if not isinstance(memories, list):
         return ""

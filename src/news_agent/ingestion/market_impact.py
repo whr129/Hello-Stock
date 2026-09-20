@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 
@@ -228,25 +227,3 @@ def _matched_terms(haystack: str, terms: frozenset[str] | tuple[str, ...]) -> li
         if re.search(rf"(?<!\w){re.escape(normalized)}(?!\w)", haystack):
             matches.append(normalized)
     return sorted(matches)
-
-
-def _load_json_object(content: str) -> dict | None:
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", content, flags=re.DOTALL)
-        if not match:
-            return None
-        try:
-            payload = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _coerce_confidence(value: object) -> float:
-    try:
-        confidence = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return max(0.0, min(1.0, confidence))

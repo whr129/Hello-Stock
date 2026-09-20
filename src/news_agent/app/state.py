@@ -44,6 +44,7 @@ Capability = Literal[
     "skills",
     "help",
     "market_research",
+    "general_search",
 ]
 
 
@@ -80,7 +81,7 @@ class SupervisorState(TypedDict, total=False):
     research_result: AgentResult
     main_agent_result: AgentResult
     runtime_run_id: int
-    active_step_id: int
+    active_step_id: int | None
     reflection_attempts: int
     reflection_decision: dict[str, Any]
     reflection_notes: list[str]

@@ -15,3 +15,8 @@ reports
 backups
 tmux
 postgres-data
+
+# Include the evaluation corpus without shipping test code.
+tests/**
+!tests/evaluation/
+!tests/evaluation/market_research_cases.jsonl

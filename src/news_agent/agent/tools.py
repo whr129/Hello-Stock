@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from news_agent.app.state import Capability, SupervisorState, UserContext
 from news_agent.domains.news.subagent import NewsSubagent
 from news_agent.memory.embeddings import EmbeddingService
 from news_agent.search.service import GeneralSearchService
@@ -129,8 +130,9 @@ def _runtime_execute(runtime_agent: Any) -> ToolExecutor:
 
 
 def _news_admin_execute(news_admin: NewsSubagent) -> ToolExecutor:
-    async def execute(request: str, user_context: dict[str, Any]) -> str:
+    async def execute(request: str, user_context: UserContext) -> str:
         lowered = request.lower()
+        capability: Capability
         if any(term in lowered for term in ("refresh", "rerun", "run the pipeline", "trigger")):
             command, args, capability = "/refresh", ["all"], "scheduler_admin"
         elif any(term in lowered for term in ("add source", "remove source", "sources", "source")):
@@ -139,7 +141,7 @@ def _news_admin_execute(news_admin: NewsSubagent) -> ToolExecutor:
             command, args, capability = "/memory", [], "memory_admin"
         else:
             command, args, capability = "/sources", [], "source_admin"
-        state = {
+        state: SupervisorState = {
             "command": command,
             "args": args,
             "message_text": request,

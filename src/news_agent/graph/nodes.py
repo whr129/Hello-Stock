@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
@@ -508,9 +509,9 @@ class SchedulerNodes:
             extra={"ticker_count": len(state.get("due_tickers", []))},
         )
         for ticker in state.get("due_tickers", []):
-            provider_step_id: int | None = None
+            provider_step_id = None
             ticker_metrics["attempted"] += 1
-            attempts: list[dict[str, Any]] = []
+            attempts = []
             try:
                 provider_step_id = await self.trace_service.start_step(
                     run_id=state["runtime_run_id"],
@@ -847,16 +848,6 @@ class SchedulerNodes:
         logger.info("scheduler stored summaries", extra={"summary_count": len(summaries)})
         return {**state, "summaries": summaries}
 
-    async def quality_check(self, state: SchedulerState) -> SchedulerState:
-        logger.info(
-            "scheduler quality check",
-            extra={
-                "summary_count": len(state.get("summaries", [])),
-                "error_count": len(state.get("errors", [])),
-            },
-        )
-        return state
-
     async def extract_mentions(self, state: SchedulerState) -> SchedulerState:
         pipeline_scope = _pipeline_scope(state.get("job_type", ""), state.get("pipeline_scope"))
         if pipeline_scope == "market_prices":
@@ -1086,7 +1077,10 @@ def _default_sources_from_settings(settings: Settings) -> list[dict[str, object]
 
 def _source_has_required_credentials(item: dict[str, object], settings: Settings) -> bool:
     provider = str(item.get("provider") or "").strip().lower()
-    config = dict(item.get("config") or {})
+    raw_config = item.get("config") or {}
+    if not isinstance(raw_config, (Mapping, Iterable)):
+        raise TypeError("default source config must be a mapping or iterable of pairs")
+    config = dict(raw_config)
     if provider == "alpha_vantage":
         return bool(config.get("api_key") or settings.alpha_vantage_api_key)
     if provider == "finnhub":

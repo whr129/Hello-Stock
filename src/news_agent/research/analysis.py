@@ -1,10 +1,19 @@
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import SupportsFloat, SupportsIndex, TypedDict
 
 from news_agent.research.schemas import CandidateExplanation, EvidenceStrength
 from news_agent.storage.models import MarketSignalSnapshot
 
 HIGH_TRUST_DIRECT_SOURCE_THRESHOLD = 0.95
+
+
+class _EvidenceProfile(TypedDict):
+    distinct_source_count: int
+    linked_source_count: int
+    distinct_cluster_count: int
+    max_trust_score: float
+    has_direct_high_impact: bool
 
 
 def explain_candidates(
@@ -95,7 +104,7 @@ def _weak_evidence(snapshot: MarketSignalSnapshot, evidence: list[dict[str, obje
     return weaknesses or ["evidence is still a weak signal and may be noisy or stale"]
 
 
-def _evidence_profile(evidence: list[dict[str, object]]) -> dict[str, object]:
+def _evidence_profile(evidence: list[dict[str, object]]) -> _EvidenceProfile:
     named_sources = {
         item.get("source_name") or item.get("source_family") or item.get("source_provider")
         for item in evidence
@@ -123,15 +132,15 @@ def _evidence_profile(evidence: list[dict[str, object]]) -> dict[str, object]:
 
 def _evidence_strength(
     snapshot: MarketSignalSnapshot,
-    profile: dict[str, object],
+    profile: _EvidenceProfile,
     *,
     min_strong_sources: int,
 ) -> EvidenceStrength:
-    distinct_source_count = int(profile["distinct_source_count"])
-    linked_source_count = int(profile["linked_source_count"])
-    distinct_cluster_count = int(profile["distinct_cluster_count"])
-    max_trust_score = float(profile["max_trust_score"])
-    has_direct_high_impact = bool(profile["has_direct_high_impact"])
+    distinct_source_count = profile["distinct_source_count"]
+    linked_source_count = profile["linked_source_count"]
+    distinct_cluster_count = profile["distinct_cluster_count"]
+    max_trust_score = profile["max_trust_score"]
+    has_direct_high_impact = profile["has_direct_high_impact"]
     if (
         distinct_source_count >= min_strong_sources
         and linked_source_count >= min_strong_sources
@@ -147,25 +156,28 @@ def _evidence_strength(
 
 def _suppression_reasons(
     strength: EvidenceStrength,
-    profile: dict[str, object],
+    profile: _EvidenceProfile,
 ) -> list[str]:
     if strength != "weak":
         return []
     reasons = []
-    if int(profile["linked_source_count"]) < 1:
+    if profile["linked_source_count"] < 1:
         reasons.append("no verified link-backed evidence candidate")
-    if int(profile["distinct_source_count"]) < 2:
+    if profile["distinct_source_count"] < 2:
         reasons.append("not enough distinct sources for a strong candidate")
-    if int(profile.get("distinct_cluster_count", 0)) < 2:
+    if profile["distinct_cluster_count"] < 2:
         reasons.append("not enough distinct evidence clusters for a strong candidate")
-    if float(profile["max_trust_score"]) < HIGH_TRUST_DIRECT_SOURCE_THRESHOLD:
+    if profile["max_trust_score"] < HIGH_TRUST_DIRECT_SOURCE_THRESHOLD:
         reasons.append("no high-trust direct source")
     return reasons
 
 
 def _trust_score(item: dict[str, object]) -> float:
+    value = item.get("trust_score")
+    if not isinstance(value, str | bytes | bytearray | memoryview | SupportsFloat | SupportsIndex):
+        return 0.0
     try:
-        return float(item.get("trust_score") or 0.0)
+        return float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
 

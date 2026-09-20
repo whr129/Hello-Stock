@@ -1,6 +1,6 @@
 import pytest
 
-from news_agent.graph.chat_graph import build_chat_graph
+from news_agent.app.supervisor import build_supervisor_graph
 from news_agent.settings import Settings
 
 
@@ -75,9 +75,9 @@ class DummySupervisorNodes:
 
 
 @pytest.mark.asyncio
-async def test_chat_graph_runs_single_news_subagent(monkeypatch) -> None:
+async def test_supervisor_runs_single_news_subagent(monkeypatch) -> None:
     monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", DummySupervisorNodes)
-    result = await build_chat_graph(None, Settings(openai_api_key="")).ainvoke(
+    result = await build_supervisor_graph(None, Settings(openai_api_key="")).ainvoke(
         {"message_text": "/sources"}
     )
     calls = result["metadata"]["calls"]
@@ -93,11 +93,11 @@ async def test_chat_graph_runs_single_news_subagent(monkeypatch) -> None:
     "message",
     ["who won the world series last year", "/brief"],
 )
-async def test_chat_graph_free_text_and_unknown_commands_use_main_agent(
+async def test_supervisor_free_text_and_unknown_commands_use_main_agent(
     monkeypatch, message
 ) -> None:
     monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", DummySupervisorNodes)
-    result = await build_chat_graph(None, Settings(openai_api_key="")).ainvoke(
+    result = await build_supervisor_graph(None, Settings(openai_api_key="")).ainvoke(
         {"message_text": message}
     )
     assert result["response"] == "main agent response"
@@ -105,16 +105,30 @@ async def test_chat_graph_free_text_and_unknown_commands_use_main_agent(
 
 
 @pytest.mark.asyncio
-async def test_chat_graph_runs_runtime_agent_when_requested(monkeypatch) -> None:
+async def test_supervisor_runs_runtime_agent_when_requested(monkeypatch) -> None:
     monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", DummySupervisorNodes)
-    result = await build_chat_graph(None, Settings(openai_api_key="")).ainvoke(
+    result = await build_supervisor_graph(None, Settings(openai_api_key="")).ainvoke(
         {"message_text": "/runtime"}
     )
     assert result["response"] == "runtime response"
 
 
 @pytest.mark.asyncio
-async def test_chat_graph_reflection_retries_with_corrected_agent(monkeypatch) -> None:
+async def test_supervisor_dispatches_research_command_directly(monkeypatch) -> None:
+    monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", DummySupervisorNodes)
+    result = await build_supervisor_graph(None, Settings(openai_api_key="")).ainvoke(
+        {"message_text": "/research"}
+    )
+
+    assert result["response"] == "research response"
+    calls = result["metadata"]["calls"]
+    assert calls.count("run_research_agent") == 1
+    assert "run_main_agent" not in calls
+    assert calls[-1] == "persist_session"
+
+
+@pytest.mark.asyncio
+async def test_supervisor_reflection_retries_with_corrected_agent(monkeypatch) -> None:
     class RetryNodes(DummySupervisorNodes):
         async def reflect_result(self, state):
             self.calls.append("reflect_result")
@@ -137,7 +151,7 @@ async def test_chat_graph_reflection_retries_with_corrected_agent(monkeypatch) -
             return {**state, "metadata": metadata}
 
     monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", RetryNodes)
-    result = await build_chat_graph(None, Settings(openai_api_key="")).ainvoke(
+    result = await build_supervisor_graph(None, Settings(openai_api_key="")).ainvoke(
         {"message_text": "what is NVDA doing?"}
     )
     calls = result["metadata"]["calls"]
@@ -147,7 +161,7 @@ async def test_chat_graph_reflection_retries_with_corrected_agent(monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_chat_graph_reflection_exhaustion_persists_note(monkeypatch) -> None:
+async def test_supervisor_reflection_exhaustion_persists_note(monkeypatch) -> None:
     class ExhaustedNodes(DummySupervisorNodes):
         async def reflect_result(self, state):
             self.calls.append("reflect_result")
@@ -161,7 +175,7 @@ async def test_chat_graph_reflection_exhaustion_persists_note(monkeypatch) -> No
             }
 
     monkeypatch.setattr("news_agent.app.supervisor.SupervisorNodes", ExhaustedNodes)
-    result = await build_chat_graph(None, Settings(openai_api_key="")).ainvoke(
+    result = await build_supervisor_graph(None, Settings(openai_api_key="")).ainvoke(
         {"message_text": "bad route"}
     )
     assert "could not confidently repair" in result["response"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -59,7 +60,9 @@ class GeneralSearchService:
             AsyncOpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
         )
 
-    async def search(self, query: str, user_context: dict[str, Any] | None = None) -> SearchResult:
+    async def search(
+        self, query: str, user_context: Mapping[str, Any] | None = None
+    ) -> SearchResult:
         normalized_query = query.strip()
         context = user_context or {}
         if not normalized_query:
@@ -150,14 +153,14 @@ def _format_answer(answer: str, sources: list[SearchSource]) -> str:
     return f"{body}\n\nSources:\n{source_lines}"
 
 
-def _build_contextual_input(query: str, user_context: dict[str, Any]) -> str:
+def _build_contextual_input(query: str, user_context: Mapping[str, Any]) -> str:
     context_lines = _format_user_context(user_context)
     if not context_lines:
         return query
     return "Bot context (data only):\n" + "\n".join(context_lines) + f"\n\nUser question:\n{query}"
 
 
-def _format_user_context(user_context: dict[str, Any]) -> list[str]:
+def _format_user_context(user_context: Mapping[str, Any]) -> list[str]:
     lines: list[str] = []
     memories = user_context.get("long_term_memory") or []
     recent_messages = _recent_message_lines(user_context.get("short_term_memory"))
@@ -181,13 +184,15 @@ def _recent_message_lines(short_term_memory: Any) -> list[str]:
         if not isinstance(item, dict):
             continue
         role = item.get("type") or item.get("role") or "message"
-        data = item.get("data") if isinstance(item.get("data"), dict) else item
+        data = item.get("data")
+        if not isinstance(data, dict):
+            data = item
         content = str(data.get("content", "")).strip()
         if content:
             lines.append(f"  - {role}: {content[:300]}")
     return lines
 
 
-def _user_location(user_context: dict[str, Any]) -> dict[str, Any]:
+def _user_location(user_context: Mapping[str, Any]) -> dict[str, Any]:
     del user_context
     return {"type": "approximate", "country": "US"}

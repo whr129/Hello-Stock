@@ -286,7 +286,7 @@ def _parse_response(
     catalysts = _validated_claims(parsed.catalysts, valid_ids)
     risks = _validated_claims(parsed.risks, valid_ids)
     contradictions = _validated_claims(parsed.contradictions, valid_ids)
-    status = "complete"
+    status: CompanyResearchStatus = "complete"
     errors: list[str] = []
     if rejected or not accepted or parsed.identity_status != "matched":
         status = "partial"

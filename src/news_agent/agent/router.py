@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 
-from news_agent.app.state import Capability, Intent
+from news_agent.app.state import AgentName, Capability, Intent
 
 COMMAND_INTENTS: dict[str, Intent] = {
     "/sources": "sources",
@@ -62,7 +62,7 @@ NON_TICKER_WORDS = {
 
 @dataclass(frozen=True)
 class RouteDecision:
-    agents: tuple[str, ...]
+    agents: tuple[AgentName, ...]
     capabilities: tuple[Capability, ...]
     fallback_response: str | None = None
 

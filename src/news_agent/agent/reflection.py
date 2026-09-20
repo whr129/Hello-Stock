@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -60,7 +61,7 @@ class ReflectionService:
             AsyncOpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
         )
 
-    async def reflect(self, state: dict[str, Any]) -> ReflectionDecision:
+    async def reflect(self, state: Mapping[str, Any]) -> ReflectionDecision:
         if self.client is None:
             return ReflectionDecision(
                 verdict="pass",
@@ -119,7 +120,7 @@ def _decision_from_payload(payload: dict[str, Any]) -> ReflectionDecision:
     )
 
 
-def _reflection_payload(state: dict[str, Any]) -> str:
+def _reflection_payload(state: Mapping[str, Any]) -> str:
     payload = {
         "user_message": state.get("message_text", ""),
         "intent": state.get("intent", ""),

@@ -90,9 +90,6 @@ class Settings(BaseSettings):
     runtime_retention_days: int = Field(default=30, alias="RUNTIME_RETENTION_DAYS")
     embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
     news_fetch_interval_seconds: int = Field(default=900, alias="NEWS_FETCH_INTERVAL_SECONDS")
-    market_refresh_interval_seconds: int = Field(
-        default=300, alias="MARKET_REFRESH_INTERVAL_SECONDS"
-    )
     rss_fetch_timeout_seconds: int = Field(default=15, alias="RSS_FETCH_TIMEOUT_SECONDS")
     market_fetch_timeout_seconds: int = Field(default=20, alias="MARKET_FETCH_TIMEOUT_SECONDS")
     llm_timeout_seconds: int = Field(default=30, alias="LLM_TIMEOUT_SECONDS")
@@ -151,9 +148,6 @@ class Settings(BaseSettings):
         default=86400,
         alias="DAILY_RESOURCES_PIPELINE_INTERVAL_SECONDS",
     )
-    news_freshness_hours: int = Field(default=24, alias="NEWS_FRESHNESS_HOURS")
-    summary_freshness_hours: int = Field(default=24, alias="SUMMARY_FRESHNESS_HOURS")
-    snapshot_freshness_minutes: int = Field(default=15, alias="SNAPSHOT_FRESHNESS_MINUTES")
     article_retention_days: int = Field(default=30, alias="ARTICLE_RETENTION_DAYS")
     snapshot_retention_days: int = Field(default=30, alias="SNAPSHOT_RETENTION_DAYS")
     market_universe_symbols: str = Field(
@@ -166,19 +160,6 @@ class Settings(BaseSettings):
             "NEE,SO,TMUS,AMT"
         ),
         alias="MARKET_UNIVERSE_SYMBOLS",
-    )
-    market_universe_areas_json: str = Field(
-        default=(
-            '{"AI, Cloud, Semis, Software":["NVDA","MSFT","AAPL","GOOGL","AMZN","META",'
-            '"AVGO","AMD","MU","TSM","LRCX","KLAC","ORCL","PLTR"],'
-            '"Financials and Payments":["JPM","BAC","GS","MS","V","MA","BRK-B"],'
-            '"Healthcare and Life Sciences":["LLY","UNH","JNJ","MRK","ABBV","ISRG","TMO"],'
-            '"Consumer and Media":["TSLA","HD","WMT","COST","MCD","NKE","DIS","NFLX"],'
-            '"Energy, Industrials, Materials, Defense":["XOM","CVX","SLB","GE","CAT","DE",'
-            '"RTX","LMT","NEM","LIN"],'
-            '"Utilities, Telecom, Real Estate Infrastructure":["NEE","SO","TMUS","AMT"]}'
-        ),
-        alias="MARKET_UNIVERSE_AREAS_JSON",
     )
     market_research_sector_config: str = Field(
         default=DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG,
@@ -226,7 +207,6 @@ class Settings(BaseSettings):
     refresh_report_enabled: bool = Field(default=True, alias="REFRESH_REPORT_ENABLED")
     signal_retention_days: int = Field(default=30, alias="SIGNAL_RETENTION_DAYS")
     signal_alert_threshold: float = Field(default=75.0, alias="SIGNAL_ALERT_THRESHOLD")
-    signal_alert_cooldown_minutes: int = Field(default=360, alias="SIGNAL_ALERT_COOLDOWN_MINUTES")
     source_health_min_score: float = Field(default=35.0, alias="SOURCE_HEALTH_MIN_SCORE")
     signal_min_strong_evidence_sources: int = Field(
         default=2,
@@ -262,7 +242,6 @@ class Settings(BaseSettings):
         alias="SIGNAL_WEIGHT_EVIDENCE_QUALITY",
     )
     signal_weight_novelty: float = Field(default=0.75, alias="SIGNAL_WEIGHT_NOVELTY")
-    social_signals_enabled: bool = Field(default=False, alias="SOCIAL_SIGNALS_ENABLED")
     llm_mention_extraction_enabled: bool = Field(
         default=False, alias="LLM_MENTION_EXTRACTION_ENABLED"
     )
