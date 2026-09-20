@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Protocol
+from typing import Protocol, SupportsFloat, SupportsIndex
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -317,7 +317,7 @@ def _parse_alpha_vantage_time(value: object) -> datetime | None:
 
 
 def _parse_unix_time(value: object) -> datetime | None:
-    if value is None:
+    if not isinstance(value, (str, bytes, bytearray, memoryview, SupportsFloat, SupportsIndex)):
         return None
     try:
         return datetime.fromtimestamp(float(value), tz=UTC)

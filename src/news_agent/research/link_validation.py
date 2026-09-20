@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import TypeAlias
+from typing import SupportsFloat, SupportsIndex, TypeAlias
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -125,8 +125,11 @@ def _has_available_high_trust_direct_evidence(evidence: list[dict[str, object]])
 
 
 def _trust_score(item: dict[str, object]) -> float:
+    value = item.get("trust_score")
+    if not isinstance(value, str | bytes | bytearray | memoryview | SupportsFloat | SupportsIndex):
+        return 0.0
     try:
-        return float(item.get("trust_score") or 0.0)
+        return float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
 

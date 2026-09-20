@@ -255,7 +255,7 @@ class SupervisorNodes:
         if decision.verdict == "retry" and attempts < self.settings.answer_reflection_max_retries:
             metadata["reflection_retry"] = True
             metadata.setdefault("reflection_history", []).append(decision_payload)
-            command, args = "", []
+            command = ""
             if corrected_agent == "research":
                 command = "/research"
             elif corrected_agent == "runtime":
@@ -263,7 +263,7 @@ class SupervisorNodes:
             return {
                 **state,
                 "command": command,
-                "args": args,
+                "args": [],
                 "news_result": {},
                 "runtime_result": {},
                 "research_result": {},
@@ -344,7 +344,7 @@ class SupervisorNodes:
 
         await self.memory_service.enqueue_if_due(user_id=state["user_context"]["user_id"])
 
-        user_context = dict(state.get("user_context", {}))
+        user_context = state.get("user_context", {}).copy()
         user_context["short_term_memory"] = serialize_state(
             short_term_state,
             max_messages=self.settings.short_term_memory_window_size,
@@ -458,19 +458,6 @@ class SupervisorNodes:
 def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settings):
     nodes = SupervisorNodes(session_factory, settings)
     graph = StateGraph(SupervisorState)
-    research_handler = getattr(nodes, "run_research_agent", None)
-
-    async def fallback_research_agent(state: SupervisorState) -> SupervisorState:
-        response = "Market research is unavailable in this graph configuration."
-        return {
-            **state,
-            "research_result": {
-                "response": response,
-                "metadata": {"capability": "market_research", "status": "unavailable"},
-            },
-            "final_response": response,
-            "response": response,
-        }
 
     graph.add_node("load_user_context", nodes.traced("load_user_context", nodes.load_user_context))
     graph.add_node("classify_request", nodes.traced("classify_request", nodes.classify_request))
@@ -487,7 +474,7 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         "run_research_agent",
         nodes.traced(
             "run_research_agent",
-            research_handler or fallback_research_agent,
+            nodes.run_research_agent,
             step_type="subagent",
         ),
     )

@@ -483,16 +483,21 @@ class ResearchSubagent:
     async def _run_research_tool(
         self,
         name: str,
-        args: dict[str, object],
+        args: object,
         plan,
         state: SupervisorState,
     ) -> tuple[str, list[CompanyResearchPacket]]:
         try:
+            if not isinstance(args, dict):
+                raise ValueError("arguments must be an object")
             if name == "stored_signals":
-                tickers = [
-                    str(ticker).upper()
-                    for ticker in (args.get("tickers") or plan.entities.tickers)
-                ]
+                raw_tickers = args.get("tickers")
+                if raw_tickers is not None and (
+                    not isinstance(raw_tickers, list)
+                    or not all(isinstance(ticker, str) for ticker in raw_tickers)
+                ):
+                    raise ValueError("tickers must be an array of strings")
+                tickers = [ticker.upper() for ticker in (raw_tickers or plan.entities.tickers)]
                 async with self.session_factory() as session:
                     repository = MarketSignalRepository(session)
                     if len(tickers) == 1:
@@ -533,11 +538,18 @@ class ResearchSubagent:
                     [],
                 )
             if name == "company_web_research":
-                selected = [
-                    item
-                    for item in (args.get("companies") or [])
-                    if isinstance(item, dict) and str(item.get("ticker", "")).strip()
-                ][:3]
+                companies = args.get("companies")
+                if companies is None:
+                    companies = []
+                if not isinstance(companies, list):
+                    raise ValueError("companies must be an array of objects")
+                for item in companies:
+                    if not isinstance(item, dict) or any(
+                        not isinstance(item.get(field, ""), str)
+                        for field in ("ticker", "company_name", "theme")
+                    ):
+                        raise ValueError("companies must contain objects with string fields")
+                selected = [item for item in companies if item.get("ticker", "").strip()][:3]
                 candidates = [
                     CandidateExplanation(
                         ticker=str(item.get("ticker", "")).upper(),

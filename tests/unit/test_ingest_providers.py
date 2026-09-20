@@ -22,9 +22,15 @@ class FakeArticle:
 
 
 def test_rss_provider_maps_feed_items(monkeypatch) -> None:
+    calls: list[tuple[str, int]] = []
+
+    def fake_parse_feed(url: str, timeout_seconds: int) -> list[FakeArticle]:
+        calls.append((url, timeout_seconds))
+        return [FakeArticle("Example", "https://example.com")]
+
     monkeypatch.setattr(
         "news_agent.ingestion.providers.parse_feed",
-        lambda url, timeout_seconds: [FakeArticle("Example", "https://example.com")],
+        fake_parse_feed,
     )
     source = SimpleNamespace(
         id=1,
@@ -40,41 +46,9 @@ def test_rss_provider_maps_feed_items(monkeypatch) -> None:
     assert len(items) == 1
     assert items[0].title == "Example"
     assert items[0].provider == "rss"
-
-
-@pytest.mark.parametrize(
-    "feed_url",
-    [
-        "https://www.federalreserve.gov/feeds/press_monetary.xml",
-        "https://www.sec.gov/cgi-bin/browse-edgar?"
-        "action=getcurrent&company=&type=8-K&dateb=&owner=include&start=0&count=40"
-        "&output=atom",
-        "https://www.eia.gov/rss/todayinenergy.xml",
-    ],
-)
-def test_rss_provider_smoke_maps_official_feed_shapes(monkeypatch, feed_url: str) -> None:
-    calls: list[tuple[str, int]] = []
-
-    def fake_parse_feed(url: str, timeout_seconds: int) -> list[FakeArticle]:
-        calls.append((url, timeout_seconds))
-        return [FakeArticle("Official update", "https://example.gov/update")]
-
-    monkeypatch.setattr("news_agent.ingestion.providers.parse_feed", fake_parse_feed)
-    source = SimpleNamespace(
-        id=1,
-        provider="rss",
-        external_account=feed_url,
-        url=feed_url,
-        config={"feed_url": feed_url},
-        field_mapping={},
-    )
-
-    items = RSSIngestProvider().fetch_items(source, timeout_seconds=7)
-
-    assert calls == [(feed_url, 7)]
-    assert len(items) == 1
-    assert items[0].external_id == "https://example.gov/update"
-    assert items[0].account == feed_url
+    assert calls == [("https://feed.example/rss", 5)]
+    assert items[0].external_id == "https://example.com"
+    assert items[0].account == "https://feed.example/rss"
 
 
 def test_account_feed_provider_uses_field_mapping(monkeypatch) -> None:

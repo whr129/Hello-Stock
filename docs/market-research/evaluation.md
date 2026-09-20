@@ -1,157 +1,40 @@
-# Market Research Evaluation Plan
+# Market research evaluation
 
-Use this plan to evaluate whether market research answers are useful, not only whether the code works. Run the local pipeline with:
+Code correctness and answer quality are separate checks. [The test guide](../../tests/README.md) describes unit, regression, and evaluation folders. The versioned [prompt corpus](../../tests/evaluation/market_research_cases.jsonl) supplies prompt IDs, requests, and expected answer properties.
+
+## Offline checks
 
 ```bash
-PYTHONPATH=src .venv/bin/news-agent-eval
+PYTHONPATH=src .venv/bin/pytest tests/unit tests/regression tests/evaluation
 ```
 
-Set `EVAL_LLM_ENABLED=true` to use the LLM judge. Results are written as JSONL plus a Markdown report under `EVAL_OUTPUT_PATH`.
+These tests cover execution contracts, known failure cases, and corpus validity. External source-pack checks are opt-in as described in the test guide. Deterministic judge tests check answer shape and safety heuristics; they do not prove current model quality, source truth, or link reachability.
 
-Reports record whether scoring used the live LLM judge or the deterministic fallback, the
-judge model, and the prompt revision. Deterministic fallback results validate basic answer
-shape only and must not be treated as evidence that model-facing prompts passed live evaluation.
+## End-to-end answer evaluation
 
-Before releasing prompt changes, run the same versioned 20-30 case suite before and after the
-change with a configured API key. Require at least a 90% pass rate, zero hallucinated-source,
-wrong-ticker, broken-link, or investment-advice failures, and no decline in average relevance,
-grounding, or usefulness. CI continues to run deterministic contract and regression tests.
+Use a separate, migrated PostgreSQL database populated with representative research evidence. The runner invokes the real chat supervisor, creates synthetic users/chats, persists conversation/session/runtime data, and can enqueue memory work. Commands in the corpus may also update research data. Do not run it against production user data or an active production scheduler.
 
-## Evaluation Layers
+From the repository root with the virtualenv activated and the evaluation database configured:
 
-Technical correctness:
-
-- Commands route to the research path.
-- Extraction writes expected mentions.
-- Scoring writes signal snapshots.
-- Reports include required fields.
-- Guardrails are present.
-
-Answer usefulness:
-
-- The answer addresses the prompt.
-- The answer gives concrete tickers, themes, sources, and evidence.
-- The answer explains why a candidate is ranked.
-- The answer is recent enough for the requested horizon.
-- The answer is concise enough for Telegram.
-
-## Prompt Set
-
-Keep a small local eval set of 20-50 prompts:
-
-```text
-/research
-/candidates
-/signals NVDA
-/signals MU
-What names are starting to get attention?
-Why is NVDA ranked?
-What changed since yesterday?
-Run deep research on semiconductors.
-What weak signals should I watch?
+```bash
+news-agent-eval --cases tests/evaluation/market_research_cases.jsonl
 ```
 
-For each prompt, write the expected answer properties before running it.
+`DATABASE_URL` selects the target database. `EVAL_MAX_CASES` limits the number of prompts (default 50), and `EVAL_OUTPUT_PATH` selects the output directory (default `reports/eval`). The command writes timestamped JSONL results and a Markdown summary.
 
-## Rubric
+Set `EVAL_LLM_ENABLED=true` and configure `OPENAI_API_KEY` to request the LLM judge; `EVAL_MODEL` overrides its model. Evaluation can incur API costs and use network access. Disabling the judge does **not** disable the answering agent's own LLM/web calls.
 
-Score each answer from 1 to 5:
+Each judgment records `live_llm` or `deterministic_fallback`. Reports include the effective mode, judge model, prompt revision, live/fallback counts, average relevance/grounding/usefulness, and a suggested improvement target. API failures or invalid judge output can fall back even when the judge is enabled. A fallback or mixed run is not a passing live quality gate.
 
-- Relevance: Did it answer the actual question?
-- Specificity: Did it give concrete tickers, themes, sources, and evidence?
-- Ticker correctness: Did it avoid fake tickers such as `A`, `V`, `THIS`, `AI`, `CEO`, or `CPA`?
-- Theme correctness: Did it use supported themes based on evidence?
-- Freshness: Did it use recent stored news and market context?
-- Source attribution: Did evidence point to concrete stored sources or article titles?
-- Source links: Did evidence include URLs when stored article links are available?
-- Grounding: Did the answer avoid source names, links, catalysts, and causal claims not present in evidence?
-- Explainability: Did it explain score components clearly?
-- Usefulness: Would this help market research?
-- Safety: Did it avoid buy/sell advice and include caveats?
-- Conciseness: Was it readable in Telegram?
+## Rubric and change procedure
 
-Example:
+The judge scores relevance, specificity, ticker/theme correctness, evidence quality, freshness, source attribution/link validity, grounding, explainability, usefulness, safety, and concision. Expected case properties determine what is relevant. Failure tags identify missing evidence, wrong tickers, stale data, invented sources, broken links, weak ranking explanations, excessive candidates, and missing safety language.
 
-```text
-Prompt: /signals MU
+For model-facing prompt changes:
 
-Expected:
-- Current rank or no-rank state.
-- Why MU is appearing.
-- Mention velocity, source diversity, recency, price, and volume components.
-- 2-3 evidence snippets or article titles.
-- Weak or missing evidence.
-- Not-financial-advice caveat.
+1. Run the same versioned corpus before and after the change using equivalent stored evidence and model configuration.
+2. Check that every judgment used the live LLM, then inspect failed cases and critical grounding/safety failures directly.
+3. Require at least 90% passing cases, no hallucinated-source, wrong-ticker, broken-link, or investment-advice failures, and no decline in mean relevance, grounding, or usefulness.
+4. Improve the layer responsible for the most common failure; rerun the same cases and add a focused deterministic regression when a code defect is found.
 
-Scores:
-Relevance: 4
-Specificity: 2
-Freshness: 3
-Explainability: 3
-Usefulness: 2
-Safety: 5
-Conciseness: 4
-
-Notes:
-Too generic. Needs article titles and clearer reason why MU matters.
-```
-
-## Bad Answer Tags
-
-Tag every bad answer with one or more reasons:
-
-- `too_generic`
-- `no_evidence`
-- `wrong_ticker`
-- `stale_data`
-- `hallucinated_source`
-- `missing_links`
-- `stale_evidence`
-- `single_source`
-- `unclear_ranking_reason`
-- `too_verbose`
-- `missing_weak_evidence`
-- `not_useful_research`
-
-## Seeded Integration Evals
-
-Create deterministic seed data for integration tests:
-
-```text
-Micron rises as HBM demand accelerates from AI server buildouts
-Nvidia suppliers gain on cloud capex optimism
-Memory chip pricing improves as data center demand grows
-```
-
-Expected result:
-
-- MU should rank.
-- Theme should be `memory chips` or `AI infrastructure`.
-- Evidence should mention HBM, cloud, or data center demand.
-- `/signals MU` should include score components and weak evidence.
-
-## Regression Tests
-
-Add deterministic tests for:
-
-- Planner outputs.
-- Extraction false positives such as `AI` and `HBM`.
-- Weighted score ordering.
-- Missing price or volume data staying neutral.
-- Report output containing score, components, evidence, weak evidence, and guardrail text.
-
-## Improvement Loop
-
-1. Run the prompt set.
-2. Score answers with the rubric.
-3. Tag bad answers.
-4. Pick the highest-frequency bad-answer tag.
-5. Improve only the relevant layer.
-6. Re-run the same prompt set.
-
-Likely first improvement targets:
-
-- Better evidence display with article titles and source names.
-- Better extraction precision.
-- Better scoring weights and thresholds.
-- Better explanation text for why a ticker matters.
+These thresholds are review criteria, not an automated deployment gate. An LLM judge is imperfect; manually verify critical source and safety claims. Generated reports are run artifacts, not the canonical test corpus.

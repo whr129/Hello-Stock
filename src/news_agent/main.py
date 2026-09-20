@@ -3,8 +3,8 @@ import logging
 
 from telegram.ext import Application
 
+from news_agent.app.supervisor import build_supervisor_graph
 from news_agent.bot.handlers import register_handlers
-from news_agent.graph.chat_graph import build_chat_graph
 from news_agent.logging import configure_logging
 from news_agent.settings import get_settings
 from news_agent.storage.database import create_session_factory
@@ -20,7 +20,7 @@ async def run_bot() -> None:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
 
     session_factory = create_session_factory(settings)
-    chat_graph = build_chat_graph(session_factory, settings)
+    chat_graph = build_supervisor_graph(session_factory, settings)
 
     application = Application.builder().token(settings.telegram_bot_token).build()
     application.bot_data["chat_graph"] = chat_graph

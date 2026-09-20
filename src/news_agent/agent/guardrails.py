@@ -17,8 +17,3 @@ def enforce_financial_guardrails(text: str) -> str:
     if "financial advice" not in lowered:
         return f"{text}\n\n{disclaimer}"
     return text
-
-
-def has_source_attribution(text: str) -> bool:
-    lowered = text.lower()
-    return "source:" in lowered or "sources:" in lowered or "via " in lowered

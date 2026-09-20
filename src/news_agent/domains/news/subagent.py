@@ -159,7 +159,7 @@ class NewsSubagent:
                     }
                 config = {"feed_url": external_account} if provider == "rss" else {}
                 fetch_mode = "rss" if provider in {"rss", "twitter", "newsletter"} else None
-                source = await repository.add_source(
+                added_source = await repository.add_source(
                     name=external_account,
                     provider=provider,
                     external_account=external_account,
@@ -168,11 +168,11 @@ class NewsSubagent:
                     fetch_mode=fetch_mode,
                 )
                 await session.commit()
-                warning = _source_config_warning(source.provider, source.config)
+                warning = _source_config_warning(added_source.provider, added_source.config)
                 return {
                     "response": (
-                        f"Added source {source.name} [{source.provider}] "
-                        f"{source.external_account}. "
+                        f"Added source {added_source.name} [{added_source.provider}] "
+                        f"{added_source.external_account}. "
                         f"{warning}"
                     ),
                     "metadata": {"capability": "source_admin"},
@@ -252,8 +252,8 @@ class NewsSubagent:
                         "metadata": {"capability": "source_admin"},
                     }
                 try:
-                    provider = self.ingest_registry.get(source.provider)
-                    items = provider.fetch_items(
+                    ingest_provider = self.ingest_registry.get(source.provider)
+                    items = ingest_provider.fetch_items(
                         source,
                         timeout_seconds=self.settings.rss_fetch_timeout_seconds,
                     )

@@ -1,240 +1,102 @@
 # Hello Stock
 
-Telegram assistant for market-impact research, runtime debugging, memory, source management, and general web questions. The project uses a LangGraph supervisor, Postgres + pgvector, and OpenAI for routing, summarization, embeddings, web search, evaluation, and memory consolidation.
+A Telegram assistant for evidence-backed market research, general web questions, source administration, and runtime inspection. It runs on Python 3.11+, LangGraph, OpenAI, and PostgreSQL with pgvector.
 
-## What It Does
+## Functionality
 
-- Routes Telegram messages through a LangGraph supervisor.
-- Uses focused subagents:
-  - `news_agent` for source management, refresh control, skills/help, and memory tools.
-  - `research_agent` for market-impact extraction, signal scoring, candidates, and ticker evidence.
-  - `runtime_agent` for refresh inspection, trace lookup, error review, alert summaries, and calling-history debugging.
-- Uses LangGraph-style short-term memory per chat thread and an async long-term memory pipeline backed by a vector store.
-- Answers off-domain or stale-data queries with OpenAI web search.
-- Reflects on each candidate answer before persistence so clearly wrong routes can retry once.
-- Runs a scheduler that refreshes market-impact source content, market snapshots, summaries, signal scoring, long-term memory jobs, runtime traces, alerts, and retention cleanup.
+- Research tickers and themes, rank market-attention candidates, and explain signals with source links, score components, and evidence gaps.
+- Answer general questions through a tool-calling main agent and cited web search.
+- Manage RSS, feed-backed Twitter/newsletter sources, and optional market-news API providers.
+- Refresh stored articles, summaries, embeddings, market snapshots, and signals on a schedule or on demand.
+- Inspect refresh reports, traces, errors, and alerts from Telegram.
+- Keep per-chat conversation context and consolidate durable user memories asynchronously.
 
-## Stack
-
-- Python 3.11+
-- `python-telegram-bot`
-- LangGraph
-- Postgres + pgvector
-- SQLAlchemy + Alembic
-- OpenAI API
-- `feedparser`, `trafilatura`, `yfinance`, `pandas`
+The product does not provide investment recommendations, watchlists, general news briefs, or daily recaps.
 
 ## Architecture
 
-### Chat Flow
+Two processes share the database: the Telegram bot handles requests; the scheduler refreshes research data and processes memory jobs.
 
 ```mermaid
 flowchart TD
-    telegram[Telegram update] --> supervisor[LangGraph supervisor]
-    supervisor --> router[LLM intent router]
-    router --> news[News subagent]
-    router --> runtime[Runtime subagent]
-    router --> search[General web search]
-    news --> merge[merge outputs]
-    runtime --> merge
-    search --> merge
-    merge --> guardrails[financial guardrails]
-    guardrails --> reflect[answer reflection]
-    reflect -->|retry route once| router
-    reflect --> persist[persist transcript + memory + runtime state]
-    persist --> reply[Telegram reply]
+    Telegram --> Context[Load chat context and semantic memory]
+    Context --> Dispatch{Known command?}
+    Dispatch -->|yes| Domain[Research / source administration / runtime]
+    Dispatch -->|no| Main[Main agent tool loop]
+    Main --> Tools[Research / runtime / sources / memory / web search]
+    Domain --> Checks[Guardrails and answer reflection]
+    Tools --> Checks
+    Checks --> Persist[Persist transcript, session and memory jobs]
+    Persist --> Reply[Telegram reply]
+    Scheduler --> Refresh[Fetch, filter, deduplicate, summarize and score]
+    Refresh --> Database[(Postgres + pgvector)]
+    Database --> Context
 ```
 
-### Scheduler Flow
+See [architecture and operations](docs/architecture.md) for module boundaries, refresh stages, and configuration.
 
-```mermaid
-flowchart TD
-    tick[Scheduler tick loop] --> due{pipeline due?}
-    due --> prices[market_prices: 10 min during US market hours]
-    due --> breaking[breaking_resources: 30 min]
-    due --> daily[daily_resources: daily]
-    prices --> fetch[fetch market snapshots]
-    breaking --> fetch[fetch tiered sources]
-    daily --> fetch
-    fetch --> store[dedupe and persist]
-    store --> summarize[precompute summaries + embeddings]
-    summarize --> mentions[extract market mentions]
-    mentions --> score[score candidate signals]
-    score --> memory[memory consolidation jobs]
-    memory --> trace[persist run + step traces]
-    trace --> alerts[push runtime alerts]
-    alerts --> cleanup[retention cleanup]
-```
-
-## Setup
+## Local setup
 
 ```bash
 cp .env.example .env
-docker compose up -d
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-PYTHONPATH=src .venv/bin/alembic upgrade head
 ```
 
-Required `.env` values:
+Set `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, and `DATABASE_URL` in `.env`. Host-run Python processes need a reachable PostgreSQL database with pgvector. For example, a development database using `news_agent` credentials and listening on port `5433` would use:
 
-```bash
-TELEGRAM_BOT_TOKEN=
+```dotenv
 DATABASE_URL=postgresql+asyncpg://news_agent:news_agent@localhost:5433/news_agent
-POSTGRES_HOST_PORT=5433
-OPENAI_API_KEY=
 ```
 
-Useful optional memory settings:
+The deployment Compose stack keeps PostgreSQL on an internal Docker network; it does not publish a host port. See the [deployment guide](docs/ci-cd.md) for container setup. For host-run development, configure your database first, then apply migrations:
 
 ```bash
-ANSWER_REFLECTION_ENABLED=true
-ANSWER_REFLECTION_MAX_RETRIES=1
-SHORT_TERM_MEMORY_WINDOW_SIZE=20
-SHORT_TERM_MEMORY_EXPIRY_MINUTES=43200
-CONVERSATION_EVENT_RETENTION_DAYS=30
-LONG_TERM_MEMORY_BATCH_SIZE=20
-LONG_TERM_MEMORY_TOP_K=5
-MEMORY_CANDIDATES_PER_BATCH=6
-MEMORY_JOB_MAX_RETRIES=3
+alembic upgrade head
 ```
 
-## Run
-
-Start the bot:
+Run the two processes in separate activated terminals:
 
 ```bash
-PYTHONPATH=src .venv/bin/news-agent
+news-agent
+news-agent-scheduler
 ```
 
-Start the scheduler in a second terminal:
+Use `/refresh all` to populate research data, then `/research` or `/signals NVDA`. Source failures and insufficient evidence can leave candidates empty; inspect `/sourcehealth` and `/refreshreport`.
 
-```bash
-PYTHONPATH=src .venv/bin/news-agent-scheduler
-```
+## Telegram commands
 
-Run tests:
+| Area | Commands |
+| --- | --- |
+| Research | `/research`, `/candidates`, `/signals <ticker>`, `/researchstatus`, `/sourcehealth` |
+| Sources | `/sources`, `/addsource <provider> <target>`, `/sourceconfig <id> <key> <value>`, `/sourcefields <id> <field> <value>`, `/sourcetest <id>`, `/sourcepack [category]`, `/removesource <id>` |
+| Refresh | `/refresh [market_prices\|breaking_resources\|daily_resources\|all]` |
+| Runtime | `/runtime`, `/job <run-id>`, `/refreshreport [run-id]`, `/trace <run-id>`, `/step <run-id> <step-name>`, `/alerts` |
+| Memory | `/memory`, `/forget <memory-id>`, `/resetmemory` |
+| Help | `/start`, `/help`, `/skills`, `/resources` |
+
+Natural-language questions use the main agent, for example `research Nvidia and today's AI capex news` or `what happened in the last refresh?`. Use explicit commands for precise source and memory mutations.
+
+## Development and evaluation
 
 ```bash
 PYTHONPATH=src .venv/bin/pytest
 PYTHONPATH=src .venv/bin/ruff check .
 ```
 
-## Architecture Notes
-
-- `src/news_agent/app/supervisor.py` is the main LangGraph entrypoint.
-- `src/news_agent/domains/news/` and `domains/runtime/` hold the command subagents.
-- `src/news_agent/research/` contains planner-driven market research extraction, scoring, and reporting.
-- `src/news_agent/search/` contains the general search agent.
-- `src/news_agent/memory/` contains the short-term message-state helpers and the async long-term memory consolidation service.
-- `src/news_agent/observability/` records runtime runs, ordered step traces, errors, and alert deliveries.
-- `src/news_agent/graph/chat_graph.py` remains a compatibility entrypoint that delegates to the supervisor graph.
-
-## Telegram Commands
-
-- `/research`, `/candidates`, `/signals <ticker>`, `/researchstatus`
-- `/sourcehealth`
-- `/sources`, `/addsource <provider> <target>`, `/sourceconfig <id> <key> <value>`, `/sourcefields <id> <field> <value>`, `/sourcetest <id>`, `/removesource <id>`
-- `/refresh [pipeline]`
-- `/runtime`, `/job <run-id>`, `/trace <run-id>`, `/step <run-id> <step-name>`, `/alerts`
-- `/memory`, `/forget <memory-id>`, `/resetmemory`
-- `/skills`, `/help`
-
-You can also ask natural-language questions directly, for example:
-- `research nvidia and today's ai capex news`
-- `who won the world series last year?`
-- `what happened in the last refresh?`
-- `what was the error in the last refresh?`
-
-## Source Providers
-
-Supported source types are `rss`, `twitter`, `newsletter`, `alpha_vantage`, `finnhub`, and `polygon`.
-
-- `rss` works directly with a feed URL.
-- `twitter` and `newsletter` are currently feed-backed account sources, not native API integrations.
-- For `twitter` or `newsletter`, you usually need `config.feed_url` after `/addsource`.
-- `alpha_vantage`, `finnhub`, and `polygon` are optional API-backed providers enabled only when their API keys are configured.
-- The checked-in default source pack is enabled by default with tier metadata for `breaking_resources` and `daily_resources`; set `DEFAULT_SOURCE_PACK_ENABLED=false` to disable it.
-
-Example:
-
-```text
-/addsource twitter @openai
-/sourceconfig 12 feed_url https://example.com/openai-feed.xml
-/sourcetest 12
-```
-
-## Safety
-
-Market research output is informational only. The assistant should not provide buy/sell recommendations.
-
-## Maintenance And Evaluation
-
-Reset generated data while preserving users, sources, and memory:
+Tests are separated into [unit, regression, and evaluation suites](tests/README.md). Live answer evaluation is a separate command that needs a migrated, populated database and can call paid APIs and write conversation/runtime data:
 
 ```bash
-PYTHONPATH=src .venv/bin/news-agent-reset-data --scope generated
+news-agent-eval --cases tests/evaluation/market_research_cases.jsonl
 ```
 
-Reset all application data while preserving the schema:
+See [evaluation guidance](docs/market-research/evaluation.md) for isolated database use and interpreting deterministic versus live judge results.
 
-```bash
-PYTHONPATH=src .venv/bin/news-agent-reset-data --scope all
-```
+## Documentation
 
-Run market-research answer evaluation:
-
-```bash
-PYTHONPATH=src .venv/bin/news-agent-eval
-```
-
-If the script entrypoint is missing in an older virtualenv, run:
-
-```bash
-PYTHONPATH=src .venv/bin/python -m news_agent.evaluation.runner
-```
-
-Useful research-quality knobs:
-
-```bash
-SOURCE_HEALTH_MIN_SCORE=35
-SIGNAL_MIN_STRONG_EVIDENCE_SOURCES=2
-SIGNAL_ALLOW_DEVELOPING_DEFAULT=false
-EVIDENCE_LINK_RECHECK_HOURS=24
-RESEARCH_REPORT_MAX_EVIDENCE_ITEMS=3
-```
-
-## Runtime Alerts
-
-Set `RUNTIME_ALERT_TELEGRAM_CHAT_ID` to a Telegram chat id if you want operator-facing runtime alerts for failed or completed-with-errors runs.
-
-## Runtime History
-
-The runtime layer records:
-- run headers for chat requests, scheduled refreshes, and manual refreshes
-- ordered step traces for supervisor nodes, subagent calls, provider fetches, and tool-like operations
-- normalized runtime errors linked to a run and step
-
-Use `/runtime` for the latest summary, `/job` for one run, `/trace` for the ordered call sequence, and `/step` to inspect one refresh or provider step during debugging. `/trace <run-id>` includes the run status, timestamps, summary, step metadata, nested child steps when present, and any recorded errors.
-
-## Answer Reflection
-
-After a candidate response passes normal guardrails, the supervisor asks a conservative reflection model whether the selected route and answer match the user request. Reflection can return `pass`, `retry`, or `fail`.
-
-- `pass`: persist and return the answer.
-- `retry`: clear prior subagent/search outputs, apply the corrected intent and args, and rerun routing once by default.
-- `fail` or exhausted retry limit: return the best available answer with a short user-facing note.
-
-Reflection is controlled by `ANSWER_REFLECTION_ENABLED` and `ANSWER_REFLECTION_MAX_RETRIES`. Reflection decisions are recorded in runtime step metadata, and exhausted reflection marks the chat run as `completed_with_errors`.
-
-## Memory System
-
-Short-term memory is maintained per chat thread as LangGraph-style message state and persisted with a rolling window. `/memory` shows the recent thread context from that state.
-
-Long-term memory is no longer stored inline on every message. The bot writes a conversation transcript, and the scheduler runs an async memory job after every 20 new user messages for a user. That job:
-- extracts durable atomic memory candidates with an LLM
-- compares them against existing vector memories
-- decides whether to add, update, or skip each candidate
-
-Long-term memory retrieval is semantic and vector-backed rather than “latest rows only.”
+- [Repository contributor instructions](AGENTS.md)
+- [Architecture, configuration, and maintenance](docs/architecture.md)
+- [Research behavior and sources](docs/market-research/index.md)
+- [Evidence contract](docs/market-research/evidence-grounding.md)
+- [Existing CI/CD and deployment guide](docs/ci-cd.md)

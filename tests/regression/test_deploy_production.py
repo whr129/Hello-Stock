@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY_SCRIPT = REPOSITORY_ROOT / "scripts" / "deploy-production.sh"
 BACKUP_SCRIPT = REPOSITORY_ROOT / "scripts" / "backup-database.sh"
 IMAGE = "ghcr.io/example/news-agent@sha256:" + ("a" * 64)

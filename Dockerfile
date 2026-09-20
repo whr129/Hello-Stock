@@ -28,6 +28,7 @@ COPY --from=builder /opt/venv /opt/venv
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY docs ./docs
+COPY tests/evaluation/market_research_cases.jsonl ./tests/evaluation/market_research_cases.jsonl
 
 RUN mkdir -p /app/reports \
     && ln -s /app/docs /opt/venv/lib/python3.12/docs \

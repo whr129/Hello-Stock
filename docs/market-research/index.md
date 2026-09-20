@@ -1,68 +1,42 @@
-# Market Research Overview
+# Market research
 
-This is the current product surface for the Telegram assistant. The bot is a market research assistant, not a general news brief or watchlist product.
+The assistant ranks market attention and explains evidence; it does not recommend trades. General web questions, source administration, runtime inspection, and memory are also supported. See [README](../../README.md) for the full command list and [architecture](../architecture.md) for execution flow.
 
-## Kept Surfaces
+## Research behavior
 
-- `/research`, `/candidates`, `/signals <ticker>`, `/researchstatus`, and `/sourcehealth`.
-- `/sources`, `/addsource`, `/sourceconfig`, `/sourcefields`, `/sourcetest`, `/sourcepack`, and `/removesource`.
-- `/refresh [pipeline]` for manual scheduler runs, including `market_prices`, `breaking_resources`, `daily_resources`, and `all`.
-- `/runtime`, `/job`, `/refreshreport`, `/trace`, `/step`, and `/alerts`.
-- `/memory`, `/forget`, `/resetmemory`, `/resources`, `/help`, and `/skills`.
-- General web search as external context for broad factual questions or missing market background.
+- `/research` updates research analysis from stored content and returns candidates. It is not a substitute for `/refresh all` when ingestion has not run.
+- `/candidates` lists ranked candidates; the planner defaults to at most three.
+- `/signals <ticker>` explains a ticker's stored signal, components, evidence, gaps, and score movement.
+- `/researchstatus` shows recent research/refresh runs and source availability.
+- `/sourcehealth` reports source quality and failures.
 
-## Removed Surfaces
+Scores combine mention velocity, diversity, recency, semantic similarity, price momentum, volume, theme persistence, and trust. Weights and evidence gates live in `Settings`. Missing evidence should yield an explicit gap or no-candidate response, never invented links or catalysts. Optional company web research (`RESEARCH_WEB_ENABLED`) supplements stored reports with current external evidence.
 
-- General news briefs and daily recap delivery.
-- Watchlists.
-- Standalone `/stocks` quote and technical-analysis requests.
-- Topic and local personalization.
-- Timezone and recap settings.
+## Sources
 
-## Current Architecture
+The curated [default source pack](default-sources.json) is enabled by default. Set `DEFAULT_SOURCE_PACK_ENABLED=false` to disable it or supply `DEFAULT_SOURCES_JSON` to override it. `/sourcepack [category]` lists available starter sources.
 
-- `app/supervisor.py` routes chat requests through LangGraph.
-- `research/` handles deterministic planning, mention extraction, scoring, analysis, and reporting.
-- `domains/news/` is now source, refresh, help/skills, resource inventory, and memory administration.
-- `domains/runtime/` handles runtime inspection and alerts.
-- `search/` handles general web-search answers outside market research.
-- `graph/scheduler_graph.py` runs tiered source fetches, market snapshot refresh, normalization, embeddings, summaries, mention extraction, scoring, and cleanup.
-- `memory/` keeps 30-day short-term session state and async long-term memory consolidation.
-- `storage/` keeps market entities, mentions, signal snapshots, theme memories, source/article/summary/embedding data, runtime records, jobs, and memories.
-- Refresh observability, reporting, and retry behavior are described in [Refresh Observability and Retry Refactor](refresh-observability-refactor.md).
-- Research answer grounding and source-link rules are described in [Evidence Grounding](evidence-grounding.md).
-- The planned measured improvement loop is described in [Self-Improving Research Plan](self-improving-research-plan.md).
+| Provider | Configuration |
+| --- | --- |
+| `rss` | Feed URL |
+| `twitter` | Feed-backed account; requires `config.feed_url`, not a native X API integration |
+| `newsletter` | Feed-backed account; requires `config.feed_url` |
+| `alpha_vantage`, `finnhub`, `polygon` | Corresponding API key in settings |
 
-## Ingestion Sources
+For example:
 
-The ingestor stores only items classified as likely to affect public stocks, equity sectors, rates, macro expectations, policy, regulation, earnings, filings, M&A, sanctions, tariffs, or market liquidity. Configure the deterministic gate with `MARKET_IMPACT_ALLOWED_CATEGORIES`, `MARKET_IMPACT_KEYWORDS`, `MARKET_IMPACT_REJECT_TERMS`, and `MARKET_IMPACT_MINIMUM_CONFIDENCE`. Optional LLM classification for uncertain items is disabled by default and controlled by `LLM_MARKET_IMPACT_CLASSIFICATION_ENABLED` and `LLM_MARKET_IMPACT_CLASSIFICATION_THRESHOLD`.
+```text
+/addsource twitter @openai
+/sourceconfig 12 feed_url https://example.com/openai-feed.xml
+/sourcetest 12
+```
 
-Pulling is source-configurable. Use `pipeline_tier`, `fetch_interval_seconds`, `max_items`, and `max_item_age_hours` in source config to control `breaking_resources` and `daily_resources` behavior. Market prices run through the `market_prices` pipeline every 10 minutes during regular US market hours.
+Replace the example URL and returned source ID with real values. Account feeds depend on the configured feed service; adding an account alone does not enable native API access.
 
-The curated starter pack is checked in at [default-sources.json](default-sources.json) and is enabled by default. It prioritizes official macro, filings, policy, regulatory, energy, commodities, company-specific EDGAR, and market-news feeds. Use `/sourcepack [category]` to list feeds that can be checked or added. Set `DEFAULT_SOURCE_PACK_ENABLED=false` to disable the checked-in pack, or set `DEFAULT_SOURCES_JSON` to override it.
+Per-source `pipeline_tier`, `fetch_interval_seconds`, `max_items`, and `max_item_age_hours` control source polling. Ingestion keeps likely market-impact content using configured categories, keywords, reject terms, and a confidence threshold. Optional LLM classification of uncertain content is disabled by default.
 
-Source quality is measured with freshness, fetch success, accepted market-impact volume, saved article volume, and link availability. Sources below `SOURCE_HEALTH_MIN_SCORE` are skipped unless their config sets `source_health_override=true`. Use `/sourcehealth` to inspect health status and score.
+Source health combines freshness, successful fetches, accepted/saved article volume, and link availability. Low-health sources can be skipped; `SOURCE_HEALTH_MIN_SCORE` controls the gate and `source_health_override=true` bypasses it for a specific source. Diagnose failures with `/sourcetest`, `/sourcehealth`, `/refreshreport`, and `/trace` before adjusting gates.
 
-Supported source providers:
+## Quality contracts
 
-- `rss`: requires a feed URL. Useful examples include company IR feeds, SEC press releases, Federal Reserve press releases, and market/news RSS feeds.
-- `twitter`: means feed-backed X.com ingestion. Add the account with `/addsource twitter @account`, then set `/sourceconfig <id> feed_url <rss-or-bridge-url>`. Use a bridge you control, such as self-hosted RSSHub or Nitter-style feeds; public bridges are fragile and may be incomplete, delayed, rate-limited, or unavailable.
-- `newsletter`: requires `config.feed_url`. Use feed-backed newsletters from Substack, beehiiv, or custom RSS.
-- `alpha_vantage`, `finnhub`, and `polygon`: optional API-backed providers enabled only when their API keys are configured.
-
-Regulatory and macro/policy source examples include SEC RSS feeds for 8-K, 10-Q, 10-K, S-1, and insider transactions, plus Fed, Treasury, BLS, BEA, White House, Congress, and regulatory agency feeds.
-
-Do not use the official X API for the current free/low-cost path. Official X API access is the reliable paid option and current X documentation describes pay-per-use API credits and usage monitoring/spending limits: [X API pricing](https://docs.x.com/x-api/getting-started/pricing) and [X usage and billing](https://docs.x.com/x-api/fundamentals/post-cap). A future `x_api` provider can add bearer-token auth, usage budgets, caching, and spending alerts behind the provider boundary.
-
-## Non-Negotiables
-
-- Do not provide buy, sell, or personalized investment advice.
-- Keep scoring weights, retention, alert thresholds, provider behavior, and source choices configuration-driven.
-- Treat transcripts, learned memories, Telegram data, source credentials, and market research data as sensitive.
-- Prefer deterministic behavior for planning, extraction, scoring, and routing. Use LLMs for summarization/explanation where appropriate, with deterministic fallbacks.
-- Keep candidate gates configurable with `SIGNAL_MIN_STRONG_EVIDENCE_SOURCES`, `SIGNAL_ALLOW_DEVELOPING_DEFAULT`, `EVIDENCE_LINK_RECHECK_HOURS`, and `RESEARCH_REPORT_MAX_EVIDENCE_ITEMS`.
-
-## Evaluation
-
-Use [Market Research Evaluation](evaluation.md) when judging answer quality or improving research usefulness.
-Use [Self-Improving Research Plan](self-improving-research-plan.md) when changing the research loop, evidence gates, or report depth.
+[Evidence grounding](evidence-grounding.md) defines attribution and confidence behavior. [Evaluation](evaluation.md) describes the versioned prompt corpus, offline contract tests, and live comparison procedure. General news briefs, watchlists, standalone `/stocks` requests, daily recaps, and topic/local personalization are retired surfaces.

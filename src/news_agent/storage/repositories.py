@@ -1,6 +1,7 @@
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import SupportsFloat, SupportsIndex
 from uuid import UUID as PythonUUID
 
 from sqlalchemy import delete, func, select, update
@@ -351,7 +352,15 @@ class SourceRepository:
             name = str(item.get("name") or external_account).strip()
             if not provider or not external_account or not name:
                 continue
-            config = dict(item.get("config") or {})
+            raw_config = item.get("config") or {}
+            if not isinstance(raw_config, (Mapping, Iterable)):
+                raise TypeError("default source config must be a mapping or iterable of pairs")
+            config = dict(raw_config)
+            trust_score = item.get("trust_score") or 0.5
+            if not isinstance(
+                trust_score, (str, bytes, bytearray, memoryview, SupportsFloat, SupportsIndex)
+            ):
+                raise TypeError("default source trust_score must be numeric")
             if provider in {"rss", "twitter", "newsletter"} and "feed_url" not in config:
                 config["feed_url"] = str(item.get("feed_url") or external_account)
             sources.append(
@@ -365,7 +374,7 @@ class SourceRepository:
                         item.get("fetch_mode")
                         or ("rss" if provider in {"rss", "twitter", "newsletter"} else provider)
                     ),
-                    trust_score=float(item.get("trust_score") or 0.5),
+                    trust_score=float(trust_score),
                 )
             )
         return sources
@@ -502,35 +511,6 @@ class MarketRepository:
 class MarketEntityRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
-
-    async def upsert_by_ticker(
-        self,
-        ticker: str,
-        *,
-        company_name: str | None = None,
-        sector: str | None = None,
-        industry: str | None = None,
-        aliases: Sequence[str] | None = None,
-        exchange: str | None = None,
-        active: bool = True,
-    ) -> MarketEntity:
-        normalized = ticker.upper()
-        result = await self.session.execute(
-            select(MarketEntity).where(MarketEntity.ticker == normalized)
-        )
-        entity = result.scalar_one_or_none()
-        if entity is None:
-            entity = MarketEntity(ticker=normalized)
-            self.session.add(entity)
-        entity.company_name = company_name if company_name is not None else entity.company_name
-        entity.sector = sector if sector is not None else entity.sector
-        entity.industry = industry if industry is not None else entity.industry
-        entity.exchange = exchange if exchange is not None else entity.exchange
-        entity.active = active
-        if aliases is not None:
-            entity.aliases = sorted({alias.strip() for alias in aliases if alias.strip()})
-        await self.session.flush()
-        return entity
 
     async def list_active(self) -> list[MarketEntity]:
         result = await self.session.execute(
@@ -848,15 +828,6 @@ class MarketThemeMemoryRepository:
 class SummaryRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
-
-    async def has_article_summary(self, article_id: int) -> bool:
-        result = await self.session.execute(
-            select(Summary.id).where(
-                Summary.article_id == article_id,
-                Summary.summary_type == "article",
-            )
-        )
-        return result.scalar_one_or_none() is not None
 
     async def save_article_summary(
         self,
@@ -1278,15 +1249,6 @@ class ConversationEventRepository:
             .limit(limit)
         )
         return list(result.scalars())
-
-    async def count_unprocessed_user_events(self, *, user_id: int, after_event_id: int) -> int:
-        result = await self.session.execute(
-            select(func.count(ConversationEvent.id))
-            .where(ConversationEvent.user_id == user_id)
-            .where(ConversationEvent.role == "user")
-            .where(ConversationEvent.id > after_event_id)
-        )
-        return int(result.scalar_one() or 0)
 
     async def latest_user_chat_id(self) -> int | None:
         result = await self.session.execute(

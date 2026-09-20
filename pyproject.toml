@@ -1,7 +1,7 @@
 [project]
 name = "news-agent"
 version = "0.1.0"
-description = "Telegram news and stock intelligence bot powered by LangGraph, Postgres, and pgvector."
+description = "Telegram market-research assistant powered by LangGraph, Postgres, and pgvector."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

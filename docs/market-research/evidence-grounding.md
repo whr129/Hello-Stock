@@ -1,79 +1,29 @@
-# Evidence Grounding
+# Evidence grounding
 
-Market research answers must be grounded in stored evidence. The bot should prefer a weaker answer with explicit gaps over a complete-looking answer that invents sources, links, causes, or catalysts.
+Research reports must distinguish stored evidence, live web sources, and missing information. Prefer a weaker answer with explicit gaps over invented sources, URLs, catalysts, or causal claims.
 
-## Evidence Contract
+## Stored evidence
 
-Every evidence item used in `/research`, `/candidates`, and `/signals <ticker>` should preserve:
+Preserve article title and canonical `articles.url`, source name/provider, publication or stored timestamp, snippet, source family, and trust score. Report missing links as unavailable rather than synthesizing a URL.
 
-- article title
-- article URL
-- source name
-- source provider
-- article published time or stored created time
-- evidence snippet
-- source family
-- trust score
+The analysis layer classifies candidates as strong, developing, or weak. Strong evidence normally needs multiple distinct named/link-backed sources and evidence clusters; a high-trust direct, high-impact source can qualify alone. Link validation can downgrade strength when URLs are unavailable. Candidate lists exclude weak evidence and show developing evidence only when enabled by the plan/configuration.
 
-`articles.url` is the canonical resource link. If a link is unavailable, the answer must say that the item is stored evidence with no link instead of inventing one.
+Price/volume gaps, stale snapshots, and limited source diversity remain explicit weaknesses even when a candidate clears the evidence gate. A high score alone is not proof of strong evidence or a recommendation to trade.
 
-## Confidence Rules
+## Reports and links
 
-Use normal confidence only when evidence is recent, link-backed, and comes from more than one distinct source.
+The planner defaults to three candidates. Reports include why a candidate ranked, an evidence chain, score drivers, source quality, weaknesses, and next checks. `/signals <ticker>` provides a focused explanation. `RESEARCH_REPORT_MAX_EVIDENCE_ITEMS` defaults to three linked evidence items per candidate.
 
-Use weak-confidence wording when evidence is:
+Link checking labels URLs available, unavailable, or missing and reuses sufficiently recent checks according to `EVIDENCE_LINK_RECHECK_HOURS`. A successful HTTP check establishes reachability, not that the page independently proves every claim. External company research must cite its own sources and keep uncertain claims explicit.
 
-- missing a URL or article title
-- from one source only
-- stale
-- low-trust
-- missing price or volume confirmation
+Relevant controls include `SIGNAL_MIN_STRONG_EVIDENCE_SOURCES`, `SIGNAL_ALLOW_DEVELOPING_DEFAULT`, `EVIDENCE_LINK_RECHECK_HOURS`, and `RESEARCH_REPORT_MAX_EVIDENCE_ITEMS`.
 
-If no stored evidence exists, the answer should say there is not enough stored evidence yet and avoid causal claims.
+## Historical snapshots
 
-## Historical Snapshots
-
-Signal snapshots created before evidence-link enrichment may only contain `article_id`, `summary_id`, and `text`. Candidate retrieval prefers newer link-backed snapshots over older unlinked rows for the same ticker/theme.
-
-Run this maintenance command after deploying evidence-link changes if old snapshots still dominate answers:
+Older signal evidence can contain only article/summary IDs and text. Retrieval prefers newer link-backed snapshots where possible. Repair recoverable historical links with:
 
 ```bash
-PYTHONPATH=src .venv/bin/news-agent-backfill-evidence --limit 500
+news-agent-backfill-evidence --limit 500
 ```
 
-## Answer Shape
-
-Research answers should include concise evidence blocks:
-
-```text
-Evidence:
-- <article title> - <source name>, <date>: <url>
-  <short snippet>
-```
-
-Limit linked evidence to three items per candidate and five candidates per answer unless a longer report format is added.
-
-## Examples
-
-Strong evidence:
-
-```text
-1. MU - memory chips - score 78
-   Components: mentions 80, diversity 60
-   Evidence: HBM demand accelerates - Example Markets, 2026-05-23: https://example.com/hbm
-     HBM demand coverage accelerated.
-```
-
-Weak evidence:
-
-```text
-1. MU - memory chips - score 52
-   Evidence: stored evidence, link unavailable: HBM demand coverage accelerated.
-   Weakness: source links are unavailable.
-```
-
-No evidence:
-
-```text
-No market attention candidates are available yet.
-```
+This updates stored evidence; it cannot recover links that are absent from the underlying articles. All research answers retain the informational-only financial caveat.

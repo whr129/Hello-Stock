@@ -248,3 +248,64 @@ class _FakeMarketSignalRepository:
     async def fetch_top_candidates(self, *, window, limit, since):
         del window, limit, since
         return []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "arguments", "reason"),
+    [
+        ("stored_signals", [], "arguments must be an object"),
+        ("stored_signals", {"tickers": "NVDA"}, "tickers must be an array of strings"),
+        ("stored_signals", {"tickers": [123]}, "tickers must be an array of strings"),
+        (
+            "company_web_research",
+            {"companies": {"ticker": "NVDA"}},
+            "companies must be an array of objects",
+        ),
+        (
+            "company_web_research",
+            {"companies": [{"ticker": 123}]},
+            "companies must contain objects with string fields",
+        ),
+        (
+            "company_web_research",
+            {"companies": [{"ticker": "NVDA", "theme": []}]},
+            "companies must contain objects with string fields",
+        ),
+    ],
+)
+async def test_research_tools_reject_malformed_arguments(name, arguments, reason) -> None:
+    agent = ResearchSubagent(session_factory=None, settings=Settings(openai_api_key=""))
+
+    content, packets = await agent._run_research_tool(name, arguments, None, {})
+
+    assert content == f"Tool '{name}' failed: {reason}"
+    assert packets == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tickers", [["nvda"], [], None])
+async def test_stored_signals_tool_uses_explicit_or_planned_tickers(monkeypatch, tickers) -> None:
+    fetched: list[str] = []
+
+    class Repository:
+        def __init__(self, session):
+            pass
+
+        async def fetch_signal_history(self, ticker):
+            fetched.append(ticker)
+            return []
+
+    monkeypatch.setattr(agents, "MarketSignalRepository", Repository)
+    agent = ResearchSubagent(
+        session_factory=_FakeSessionFactory(), settings=Settings(openai_api_key="")
+    )
+    plan = SimpleNamespace(entities=SimpleNamespace(tickers=["NVDA"]))
+
+    content, packets = await agent._run_research_tool(
+        "stored_signals", {"tickers": tickers}, plan, {}
+    )
+
+    assert fetched == ["NVDA"]
+    assert "failed" not in content
+    assert packets == []

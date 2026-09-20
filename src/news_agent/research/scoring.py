@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from math import log1p
+from typing import SupportsFloat, SupportsIndex
 
 from news_agent.research.schemas import CandidateScore, ScoreComponents
 from news_agent.settings import Settings
@@ -167,6 +168,8 @@ def _novelty_score(theme_memory_count: int) -> float:
 
 
 def _float(value: object) -> float:
+    if not isinstance(value, str | bytes | bytearray | memoryview | SupportsFloat | SupportsIndex):
+        return 0.0
     try:
         return float(value or 0.0)
     except (TypeError, ValueError):

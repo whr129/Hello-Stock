@@ -23,7 +23,6 @@ def build_scheduler_graph(session_factory: async_sessionmaker, settings: Setting
     graph.add_node("evidence_backfill", nodes.traced("evidence_backfill", nodes.evidence_backfill))
     graph.add_node("score_signals", nodes.traced("score_signals", nodes.score_signals))
     graph.add_node("confidence_filter", nodes.traced("confidence_filter", nodes.confidence_filter))
-    graph.add_node("quality_check", nodes.traced("quality_check", nodes.quality_check))
     graph.add_node(
         "cleanup_market_research",
         nodes.traced("cleanup_market_research", nodes.cleanup_market_research),
@@ -40,8 +39,7 @@ def build_scheduler_graph(session_factory: async_sessionmaker, settings: Setting
     graph.add_edge("sector_enrichment", "evidence_backfill")
     graph.add_edge("evidence_backfill", "score_signals")
     graph.add_edge("score_signals", "confidence_filter")
-    graph.add_edge("confidence_filter", "quality_check")
-    graph.add_edge("quality_check", "cleanup_market_research")
+    graph.add_edge("confidence_filter", "cleanup_market_research")
     graph.add_edge("cleanup_market_research", "retry_or_recover")
     graph.add_edge("retry_or_recover", END)
 
