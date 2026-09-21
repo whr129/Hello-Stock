@@ -29,13 +29,34 @@ The scheduler checks due pipelines every `SCHEDULER_TICK_SECONDS` (default 60 se
 
 `graph/scheduler_graph.py` and `graph/nodes.py` load due sources, fetch source/market data, apply the market-impact gate and deduplication, store embeddings, precompute summaries, extract mentions, count sector context, backfill evidence, score signals, count confident-signal context, and prune research data. Candidate filtering happens later in `research/analysis.py` when preparing answers. The final stage records job completion and errors. Individual source and ticker fetches retry with configured attempt limits and linear backoff; errors remain visible while other sources continue.
 
-Each tick also drains queued long-term-memory jobs and runs retention cleanup. By default, every 20 new user messages makes a consolidation batch eligible: the memory service extracts durable candidates, compares vector memories, and adds, updates, or skips them. The short-term window defaults to 20 messages and expires after 30 days; these values are configurable.
+Each tick also drains queued long-term-memory jobs, delivers any due daily research report,
+and runs retention cleanup. By default, every 20 new user messages makes a consolidation
+batch eligible: the memory service extracts durable candidates, compares vector memories,
+and adds, updates, or skips them. The short-term window defaults to 20 messages and expires
+after 30 days; these values are configurable.
 
 ## Runtime visibility
 
 `observability/runtime.py` records runs, ordered steps, errors, and refresh reports. `/runtime`, `/job`, `/trace`, and `/step` inspect this history; `/refreshreport` shows structured refresh counts, retries, failures, and delivery status.
 
-Refresh reports are stored in runtime-run metadata and, when `REFRESH_REPORT_ENABLED=true`, sent to the latest active user chat. No chat or bot token produces an explicit skipped delivery status. Operator alerts are separate: set `RUNTIME_ALERT_TELEGRAM_CHAT_ID` to a nonzero chat ID to enable them; `/alerts` lists alert records.
+Refresh reports are stored in runtime-run metadata without automatic Telegram delivery.
+`scheduler/reports.py` sends a daily research report using recent stored 24-hour signals,
+the existing evidence gates and link checks, and the candidate formatter. Configure
+`DAILY_RESEARCH_REPORT_ENABLED`, `DAILY_RESEARCH_REPORT_TIME` (default `18:00`),
+`DAILY_RESEARCH_REPORT_TIMEZONE` (default `America/Toronto`),
+`DAILY_RESEARCH_REPORT_CHAT_ID` (`0` selects the latest user chat), and
+`DAILY_RESEARCH_REPORT_MAX_CANDIDATES` (default `3`). A missing bot token or destination skips
+delivery. No chat transcripts or personal memories are included.
+
+The configured local date is the report key in `runtime_runs`; completed reports survive
+scheduler restarts. A PostgreSQL transaction advisory lock prevents overlapping schedulers
+from sending simultaneously. Each successful message chunk is checkpointed, so normal
+retries resume with the remaining chunks. Failed generation or delivery is recorded, with
+up to `DAILY_RESEARCH_REPORT_MAX_ATTEMPTS` (default `3`) attempts and a minimum
+`DAILY_RESEARCH_REPORT_RETRY_SECONDS` (default `300`) delay. A crash between Telegram accepting
+a message and its database checkpoint can repeat that chunk; Telegram delivery and database
+writes are not atomic. Missed previous days are not replayed. Operator alerts are separate:
+set `RUNTIME_ALERT_TELEGRAM_CHAT_ID` to a nonzero chat ID to enable them; `/alerts` lists alerts.
 
 ## Configuration
 

@@ -9,6 +9,9 @@ The assistant ranks market attention and explains evidence; it does not recommen
 - `/signals <ticker>` explains a ticker's stored signal, components, evidence, gaps, and score movement.
 - `/researchstatus` shows recent research/refresh runs and source availability.
 - `/sourcehealth` reports source quality and failures.
+- The scheduler delivers a configurable daily report of recent stored candidates to Telegram;
+  see [daily report settings](../../README.md#daily-research-report). Refresh diagnostics are
+  available on demand rather than pushed after every refresh.
 
 Scores combine mention velocity, diversity, recency, semantic similarity, price momentum, volume, theme persistence, and trust. Weights and evidence gates live in `Settings`. Missing evidence should yield an explicit gap or no-candidate response, never invented links or catalysts. Optional company web research (`RESEARCH_WEB_ENABLED`) supplements stored reports with current external evidence.
 

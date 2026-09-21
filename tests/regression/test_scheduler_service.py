@@ -26,7 +26,7 @@ def test_refresh_retry_settings_have_defaults() -> None:
     assert settings.source_fetch_retry_backoff_seconds == 2
     assert settings.market_fetch_max_attempts == 2
     assert settings.market_fetch_retry_backoff_seconds == 2
-    assert settings.refresh_report_enabled is True
+    assert settings.daily_research_report_enabled is True
 
 
 def test_format_refresh_summary_includes_provider_counts() -> None:
@@ -116,8 +116,19 @@ def test_due_pipelines_adds_prices_only_when_market_is_open() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_scheduler_tick_triggers_due_tiered_pipelines(monkeypatch) -> None:
+@pytest.mark.parametrize("injected_now", [True, False])
+async def test_run_scheduler_tick_triggers_due_tiered_pipelines(monkeypatch, injected_now) -> None:
     calls: list[str] = []
+    tick_time = datetime(2026, 5, 29, 14, 0, tzinfo=UTC)
+    report_time = tick_time if injected_now else tick_time + timedelta(days=1)
+    times = iter([tick_time, report_time])
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(times)
+
+    monkeypatch.setattr("news_agent.scheduler.service.datetime", Clock)
 
     class FakeSchedulerControlService:
         session_factory = object()
@@ -143,6 +154,14 @@ async def test_run_scheduler_tick_triggers_due_tiered_pipelines(monkeypatch) -> 
         async def process_due_jobs(self):
             calls.append("memory")
 
+    class FakeDailyResearchReportService:
+        def __init__(self, session_factory, settings) -> None:
+            del session_factory, settings
+
+        async def deliver_if_due(self, now):
+            assert now == report_time
+            calls.append("report")
+
     monkeypatch.setattr(
         "news_agent.scheduler.service.SchedulerControlService",
         FakeSchedulerControlService,
@@ -151,12 +170,18 @@ async def test_run_scheduler_tick_triggers_due_tiered_pipelines(monkeypatch) -> 
         "news_agent.scheduler.service.MemoryConsolidationService",
         FakeMemoryConsolidationService,
     )
+    monkeypatch.setattr(
+        "news_agent.scheduler.service.DailyResearchReportService",
+        FakeDailyResearchReportService,
+    )
 
     result = await run_scheduler_tick(
         Settings(openai_api_key=""),
         {},
-        now=datetime(2026, 5, 29, 14, 0, tzinfo=UTC),
+        now=tick_time if injected_now else None,
     )
 
-    assert calls == ["market_prices", "breaking_resources", "daily_resources", "memory", "cleanup"]
+    assert calls == [
+        "market_prices", "breaking_resources", "daily_resources", "memory", "report", "cleanup"
+    ]
     assert set(result) == {"market_prices", "breaking_resources", "daily_resources"}

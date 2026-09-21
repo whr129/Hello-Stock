@@ -1,6 +1,7 @@
 from functools import lru_cache
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG: str = (
@@ -204,7 +205,25 @@ class Settings(BaseSettings):
         default=2,
         alias="MARKET_FETCH_RETRY_BACKOFF_SECONDS",
     )
-    refresh_report_enabled: bool = Field(default=True, alias="REFRESH_REPORT_ENABLED")
+    daily_research_report_enabled: bool = Field(default=True, alias="DAILY_RESEARCH_REPORT_ENABLED")
+    daily_research_report_time: str = Field(
+        default="18:00",
+        pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$",
+        alias="DAILY_RESEARCH_REPORT_TIME",
+    )
+    daily_research_report_timezone: str = Field(
+        default="America/Toronto", alias="DAILY_RESEARCH_REPORT_TIMEZONE"
+    )
+    daily_research_report_chat_id: int = Field(default=0, alias="DAILY_RESEARCH_REPORT_CHAT_ID")
+    daily_research_report_max_candidates: int = Field(
+        default=3, ge=1, le=10, alias="DAILY_RESEARCH_REPORT_MAX_CANDIDATES"
+    )
+    daily_research_report_max_attempts: int = Field(
+        default=3, ge=1, alias="DAILY_RESEARCH_REPORT_MAX_ATTEMPTS"
+    )
+    daily_research_report_retry_seconds: int = Field(
+        default=300, ge=1, alias="DAILY_RESEARCH_REPORT_RETRY_SECONDS"
+    )
     signal_retention_days: int = Field(default=30, alias="SIGNAL_RETENTION_DAYS")
     signal_alert_threshold: float = Field(default=75.0, alias="SIGNAL_ALERT_THRESHOLD")
     source_health_min_score: float = Field(default=35.0, alias="SOURCE_HEALTH_MIN_SCORE")
@@ -264,6 +283,15 @@ class Settings(BaseSettings):
     eval_max_cases: int = Field(default=50, alias="EVAL_MAX_CASES")
     eval_output_path: str = Field(default="reports/eval", alias="EVAL_OUTPUT_PATH")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+
+    @field_validator("daily_research_report_timezone")
+    @classmethod
+    def validate_report_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("Use an IANA timezone such as America/Toronto or UTC") from exc
+        return value
 
     @property
     def sync_database_url(self) -> str:
