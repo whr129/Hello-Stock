@@ -79,7 +79,7 @@ class SchedulerNodes:
         self.market_impact_classifier = MarketImpactClassifier(settings)
         self.trace_service = RuntimeTraceService(session_factory, settings)
         self.alert_service = RuntimeAlertService(session_factory, settings)
-        self.report_service = RefreshReportService(session_factory, settings)
+        self.report_service = RefreshReportService(session_factory)
 
     def traced(self, step_name: str, func):
         async def wrapped(state: SchedulerState) -> SchedulerState:
@@ -124,7 +124,7 @@ class SchedulerNodes:
                         "runtime_run_id": run_id,
                         "errors": [*list(state.get("errors", [])), message],
                     }
-                    await self.report_service.record_and_deliver(
+                    await self.report_service.record(
                         run_id=run_id,
                         status="failed",
                         state=failed_state,
@@ -152,7 +152,7 @@ class SchedulerNodes:
                     summary=summarize_run_state(workflow, result),
                 )
                 if _is_refresh_workflow(workflow):
-                    await self.report_service.record_and_deliver(
+                    await self.report_service.record(
                         run_id=run_id,
                         status=status,
                         state=result,

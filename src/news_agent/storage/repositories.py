@@ -1017,6 +1017,23 @@ class RuntimeRunRepository:
         result = await self.session.execute(select(RuntimeRun).where(RuntimeRun.id == run_id))
         return result.scalar_one_or_none()
 
+    async def lock_daily_research_report(self) -> bool:
+        # Transaction-scoped lock: overlapping scheduler processes must not both send.
+        result = await self.session.execute(select(func.pg_try_advisory_xact_lock(0x4E415250)))
+        return bool(result.scalar())
+
+    async def get_daily_research_report(self, report_date: str) -> RuntimeRun | None:
+        result = await self.session.execute(
+            select(RuntimeRun)
+            .where(
+                RuntimeRun.workflow == "daily_research_report",
+                RuntimeRun.trigger == report_date,
+            )
+            .order_by(RuntimeRun.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def list_recent(
         self,
         *,
@@ -1035,7 +1052,13 @@ class RuntimeRunRepository:
 
     async def delete_started_before(self, cutoff: datetime) -> int:
         result = await self.session.execute(
-            delete(RuntimeRun).where(RuntimeRun.started_at < cutoff).returning(RuntimeRun.id)
+            delete(RuntimeRun)
+            .where(RuntimeRun.started_at < cutoff)
+            .where(
+                (RuntimeRun.workflow != "daily_research_report")
+                | (RuntimeRun.started_at < datetime.now(UTC) - timedelta(days=2))
+            )
+            .returning(RuntimeRun.id)
         )
         await self.session.flush()
         return len(result.scalars().all())

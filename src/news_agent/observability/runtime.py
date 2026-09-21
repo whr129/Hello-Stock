@@ -11,7 +11,6 @@ from telegram.error import TelegramError
 
 from news_agent.settings import Settings
 from news_agent.storage.repositories import (
-    ConversationEventRepository,
     RuntimeAlertRepository,
     RuntimeErrorRepository,
     RuntimeRunRepository,
@@ -162,12 +161,10 @@ class RuntimeAlertService:
 
 
 class RefreshReportService:
-    def __init__(self, session_factory: async_sessionmaker, settings: Settings) -> None:
+    def __init__(self, session_factory: async_sessionmaker) -> None:
         self.session_factory = session_factory
-        self.settings = settings
-        self.bot = Bot(token=settings.telegram_bot_token) if settings.telegram_bot_token else None
 
-    async def record_and_deliver(
+    async def record(
         self,
         *,
         run_id: int,
@@ -175,37 +172,11 @@ class RefreshReportService:
         state: dict[str, Any],
     ) -> dict[str, Any]:
         report = await self._build_report(run_id=run_id, status=status, state=state)
-        delivery_status = "disabled"
-        target_chat_id: int | None = None
-        delivered_at: datetime | None = None
-
-        if self.settings.refresh_report_enabled:
-            async with self.session_factory() as session:
-                target_chat_id = await ConversationEventRepository(session).latest_user_chat_id()
-            if target_chat_id is None:
-                delivery_status = "skipped_no_chat"
-            elif self.bot is None:
-                delivery_status = "skipped_no_bot"
-            else:
-                try:
-                    await self.bot.send_message(chat_id=target_chat_id, text=report["text"])
-                except TelegramError as exc:
-                    logger.warning(
-                        "refresh report delivery failed target=%s error=%s",
-                        target_chat_id,
-                        exc,
-                    )
-                    delivery_status = "failed"
-                    report["delivery_error"] = str(exc)
-                else:
-                    delivery_status = "delivered"
-                    delivered_at = datetime.now(UTC)
-
         report.update(
             {
-                "delivery_status": delivery_status,
-                "target_chat_id": target_chat_id,
-                "delivered_at": delivered_at.isoformat() if delivered_at else None,
+                "delivery_status": "disabled",
+                "target_chat_id": None,
+                "delivered_at": None,
             }
         )
         async with self.session_factory() as session:
@@ -213,7 +184,7 @@ class RefreshReportService:
                 run_id,
                 {
                     "refresh_report": report,
-                    "report_delivery_status": delivery_status,
+                    "report_delivery_status": "disabled",
                 },
             )
             await session.commit()

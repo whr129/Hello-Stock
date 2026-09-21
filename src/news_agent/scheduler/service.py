@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 from news_agent.markets.hours import is_us_market_open
 from news_agent.memory.consolidation import MemoryConsolidationService
+from news_agent.scheduler.reports import DailyResearchReportService
 from news_agent.settings import Settings
 from news_agent.storage.database import create_session_factory
 from news_agent.storage.repositories import (
@@ -140,6 +141,7 @@ async def run_scheduler_tick(
 ) -> PipelineRunState:
     control = SchedulerControlService(settings)
     memory_service = MemoryConsolidationService(control.session_factory, settings)
+    report_time = now
     now = now or datetime.now(UTC)
     last_runs = _coerce_pipeline_run_state(last_refresh_at)
 
@@ -149,6 +151,9 @@ async def run_scheduler_tick(
             last_runs[pipeline_name] = now
 
     await memory_service.process_due_jobs()
+    await DailyResearchReportService(control.session_factory, settings).deliver_if_due(
+        report_time or datetime.now(UTC)
+    )
     await control.cleanup_expired_content()
     return last_runs
 

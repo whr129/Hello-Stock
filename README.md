@@ -9,6 +9,7 @@ A Telegram assistant for evidence-backed market research, general web questions,
 - Manage RSS, feed-backed Twitter/newsletter sources, and optional market-news API providers.
 - Refresh stored articles, summaries, embeddings, market snapshots, and signals on a schedule or on demand.
 - Inspect refresh reports, traces, errors, and alerts from Telegram.
+- Receive a configurable daily research report with ranked candidates and evidence links.
 - Keep per-chat conversation context and consolidate durable user memories asynchronously.
 
 The product does not provide investment recommendations, watchlists, general news briefs, or daily recaps.
@@ -64,6 +65,34 @@ news-agent-scheduler
 ```
 
 Use `/refresh all` to populate research data, then `/research` or `/signals NVDA`. Source failures and insufficient evidence can leave candidates empty; inspect `/sourcehealth` and `/refreshreport`.
+
+## Daily research report
+
+Refreshes run quietly; their diagnostic reports remain available with `/refreshreport`.
+The scheduler sends a daily research report at 18:00 America/Toronto by default. Configure it
+in `.env`, then restart `news-agent-scheduler`:
+
+```dotenv
+DAILY_RESEARCH_REPORT_ENABLED=true
+DAILY_RESEARCH_REPORT_TIME=18:00
+DAILY_RESEARCH_REPORT_TIMEZONE=America/Toronto
+DAILY_RESEARCH_REPORT_CHAT_ID=0
+DAILY_RESEARCH_REPORT_MAX_CANDIDATES=3
+```
+
+Use a 24-hour `HH:MM` time and an IANA timezone. Set a Telegram chat/group ID for a fixed
+destination; `0` uses the most recent user chat when the day's report starts. The bot must
+already have access to that chat. Set `DAILY_RESEARCH_REPORT_ENABLED=false` to disable it.
+
+Reports use stored 24-hour signals updated within the past day, with the existing evidence
+gates, links, caveats, and an explicit no-candidates message when evidence is insufficient.
+Delivery runs on the first scheduler tick after the configured time, including after a
+same-day restart; missed previous days are not replayed. The schedule follows local daylight
+saving time. Completed reports and sent chunks are persisted, with up to
+`DAILY_RESEARCH_REPORT_MAX_ATTEMPTS=3` attempts spaced by at least
+`DAILY_RESEARCH_REPORT_RETRY_SECONDS=300`. Delivery status appears in `/runtime` and `/job`.
+The old `REFRESH_REPORT_ENABLED` setting is ignored. Operator error alerts remain controlled
+separately by `RUNTIME_ALERT_TELEGRAM_CHAT_ID`.
 
 ## Telegram commands
 
