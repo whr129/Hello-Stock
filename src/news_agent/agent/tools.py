@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from inspect import signature
 from typing import Any
 
+from pydantic import BaseModel, Field, RootModel
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from news_agent.app.state import Capability, SupervisorState, UserContext
 from news_agent.domains.news.subagent import NewsSubagent
+from news_agent.harness.contracts import CapabilitySpec, Contract, RunContext
 from news_agent.memory.embeddings import EmbeddingService
 from news_agent.search.service import GeneralSearchService
 from news_agent.settings import Settings
@@ -22,6 +25,56 @@ class Tool:
     description: str
     parameters: dict[str, Any]
     execute: ToolExecutor
+    input_model: type[BaseModel] | None = None
+    effect: str = "read"
+
+
+class QueryArguments(Contract):
+    query: str
+
+
+class ResearchArguments(QueryArguments):
+    tickers: list[str] = Field(default_factory=list)
+
+
+class AdminArguments(Contract):
+    request: str
+
+
+class LegacyArguments(RootModel[dict[str, Any]]):
+    pass
+
+
+def tool_capability(tool: Tool) -> CapabilitySpec:
+    """Adapt registered call signatures; identity only comes from trusted context."""
+    parameters = signature(tool.execute).parameters
+
+    async def handler(args: BaseModel, context: RunContext):
+        payload = args.model_dump()
+        query = payload.pop("query", payload.pop("request", ""))
+        if "user_context" in parameters:
+            payload["user_context"] = context.data.get("user_context", {})
+        if "user_id" in parameters:
+            payload["user_id"] = context.user_id or context.data.get("user_context", {}).get(
+                "user_id"
+            )
+        from news_agent.harness.runtime import current_runtime, runtime_scope
+
+        runtime = current_runtime()
+        if runtime is not None:
+            with runtime_scope(replace(runtime, context=context)):
+                return await tool.execute(query, **payload)
+        return await tool.execute(query, **payload)
+
+    return CapabilitySpec(
+        id=tool.name,
+        description=tool.description,
+        input_model=tool.input_model or LegacyArguments,
+        input_schema=None if tool.input_model else tool.parameters,
+        handler=handler,
+        effect=tool.effect,
+        timeout_seconds=90,
+    )
 
 
 def build_main_tools(
@@ -47,6 +100,7 @@ def build_main_tools(
                 "required": ["query"],
             },
             execute=_web_search_execute(search_service),
+            input_model=QueryArguments,
         ),
         "research_agent": Tool(
             name="research_agent",
@@ -63,6 +117,8 @@ def build_main_tools(
                 "required": ["query"],
             },
             execute=_research_execute(research_agent),
+            input_model=ResearchArguments,
+            effect="cache",
         ),
         "runtime_agent": Tool(
             name="runtime_agent",
@@ -73,6 +129,7 @@ def build_main_tools(
                 "required": ["query"],
             },
             execute=_runtime_execute(runtime_agent),
+            input_model=QueryArguments,
         ),
         "news_admin": Tool(
             name="news_admin",
@@ -85,6 +142,8 @@ def build_main_tools(
                 "required": ["request"],
             },
             execute=_news_admin_execute(news_admin),
+            input_model=AdminArguments,
+            effect="write",
         ),
         "memory_search": Tool(
             name="memory_search",
@@ -95,6 +154,7 @@ def build_main_tools(
                 "required": ["query"],
             },
             execute=_memory_search_execute(session_factory, embedding_service, settings),
+            input_model=QueryArguments,
         ),
     }
 

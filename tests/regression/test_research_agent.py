@@ -1,10 +1,12 @@
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 
 from news_agent.research import agents
 from news_agent.research.agents import ResearchSubagent
+from news_agent.research.schemas import CompanyResearchPacket, ResearchWebEvidence
 from news_agent.settings import Settings
 
 
@@ -112,10 +114,30 @@ async def test_research_agent_llm_loop_feeds_web_enrichment(monkeypatch) -> None
             del kwargs
             return SimpleNamespace(choices=[SimpleNamespace(message=messages.pop(0))])
 
-    packet = SimpleNamespace(
+    packet = CompanyResearchPacket(
         ticker="NVDA",
+        company_name="NVIDIA",
+        identity_status="matched",
+        as_of=datetime.now(UTC),
         status="complete",
-        evidence=[SimpleNamespace(title="Nvidia filing", url="https://example.com/filing")],
+        evidence=[
+            ResearchWebEvidence(
+                id="filing",
+                ticker="NVDA",
+                title="Nvidia filing",
+                url="https://example.com/filing",
+                canonical_url="https://example.com/filing",
+                publisher="NVIDIA",
+                source_kind="filing",
+                source_tier=1,
+                trust_score=1,
+                primary=True,
+                published_at=None,
+                event_at=None,
+                retrieved_at=datetime.now(UTC),
+                summary="Filing",
+            )
+        ],
     )
 
     class FakeCoordinator:
@@ -128,9 +150,7 @@ async def test_research_agent_llm_loop_feeds_web_enrichment(monkeypatch) -> None
         session_factory=_FakeSessionFactory(),
         settings=Settings(openai_api_key="test", research_web_enabled=True),
     )
-    agent.research_llm_client = SimpleNamespace(
-        chat=SimpleNamespace(completions=FakeCompletions())
-    )
+    agent.research_llm_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
     agent.company_research = FakeCoordinator()
 
     result = await agent.run(
@@ -167,9 +187,7 @@ async def test_research_llm_failure_preserves_deterministic_report(monkeypatch) 
         chat=SimpleNamespace(completions=FailingCompletions())
     )
 
-    result = await agent.run(
-        {"command": "/candidates", "args": [], "message_text": "/candidates"}
-    )
+    result = await agent.run({"command": "/candidates", "args": [], "message_text": "/candidates"})
 
     assert "No market attention candidates are available yet" in result["response"]
     assert result["metadata"]["research_llm_used"] is False

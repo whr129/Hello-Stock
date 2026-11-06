@@ -14,6 +14,20 @@ def test_example_environment_loads_with_runtime_alerts_disabled(monkeypatch) -> 
     assert settings.runtime_alert_telegram_chat_id == 0
 
 
+def test_settings_diagnostics_omit_credentials() -> None:
+    settings = Settings(
+        _env_file=None,
+        telegram_bot_token="private-telegram-test-value",
+        openai_api_key="private-openai-test-value",
+        openrouter_api_key="private-openrouter-test-value",
+        database_url="postgresql+asyncpg://user:private-db-test-value@localhost/db",
+        alpha_vantage_api_key="private-alpha-test-value",
+        finnhub_api_key="private-finnhub-test-value",
+        polygon_api_key="private-polygon-test-value",
+    )
+    assert "private-" not in repr(settings)
+
+
 def test_daily_report_configuration_loads_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("DAILY_RESEARCH_REPORT_ENABLED", "false")
     monkeypatch.setenv("DAILY_RESEARCH_REPORT_TIME", "09:30")

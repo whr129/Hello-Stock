@@ -93,3 +93,24 @@ news-agent-reset-data --scope all
 ```
 
 Deployment-specific instructions remain in [the CI/CD guide](ci-cd.md). Root design/planning documents are historical or proposed work; executable code and these current-operation references define implemented behavior.
+
+## Fast market alerts
+
+The scheduler's fast collector claims due, globally owned alert sources in PostgreSQL, commits
+the lease, and then fetches providers with bounded concurrency. Deterministic market relevance
+filtering precedes atomic article URL insertion. Provider metadata and unknown publication times
+are preserved. Separate alert fetch timestamps leave bulk refresh scheduling independent; the
+normal embedding stage drains a bounded backlog of unembedded articles.
+
+`alerts/service.py` groups evidence into revisioned events, computes sentiment context, and asks
+Jev through OpenRouter whether to deliver immediately, include in the daily report, or ignore.
+The harness provides the assessment capability boundary. Freshness, confidence, quiet hours,
+cooldowns, and rate limits still gate delivery. Shadow mode records assessments without sending.
+Jev is not a news source and cannot replace ingestion.
+
+Migration `0007_market_alerts` stores events/evidence snapshots, decisions, monthly budget
+reservations, sentiment series, and an outbox independently of runtime-log retention. Claims and
+budget changes use short database transactions; network work occurs after commit. Decision and
+outbox creation are atomic. Telegram chunk checkpoints support known-failure retries; uncertain
+send outcomes become `unknown` and are never automatically replayed. See the
+[operator runbook](../README.md#market-news-and-sentiment-alerts) for configuration and diagnostics.

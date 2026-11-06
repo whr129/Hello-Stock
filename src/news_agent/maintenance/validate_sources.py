@@ -1,8 +1,9 @@
 import argparse
 import json
 from pathlib import Path
+from urllib.error import HTTPError
 
-from news_agent.ingestion.providers import IngestProviderRegistry
+from news_agent.ingestion.providers import IngestProvider, IngestProviderRegistry
 from news_agent.settings import Settings
 from news_agent.storage.models import Source
 
@@ -16,6 +17,7 @@ def validate_source_pack(
     *,
     timeout_seconds: int = 15,
     write: bool = False,
+    remove_unauthorized: bool = False,
     settings: Settings | None = None,
 ) -> dict[str, int]:
     config = settings or Settings()
@@ -29,16 +31,28 @@ def validate_source_pack(
         source = _source_from_config(index, source_config)
         try:
             provider = registry.get(source.provider)
+            if remove_unauthorized:
+                if _confirmed_unauthorized(provider, source, timeout_seconds):
+                    dropped += 1
+                else:
+                    kept.append(source_config)
+                continue
             items = provider.fetch_items(source, timeout_seconds=timeout_seconds)
         except ValueError as exc:
             if "api_key" in str(exc) or "API_KEY" in str(exc):
                 skipped += 1
                 kept.append(source_config)
                 continue
-            dropped += 1
+            if remove_unauthorized:
+                kept.append(source_config)
+            else:
+                dropped += 1
             continue
         except Exception:
-            dropped += 1
+            if remove_unauthorized:
+                kept.append(source_config)
+            else:
+                dropped += 1
             continue
 
         if items:
@@ -52,17 +66,37 @@ def validate_source_pack(
     return {"checked": len(sources), "kept": len(kept), "dropped": dropped, "skipped": skipped}
 
 
+def _confirmed_unauthorized(
+    provider: IngestProvider, source: Source, timeout_seconds: int
+) -> bool:
+    for _ in range(2):
+        try:
+            provider.fetch_items(source, timeout_seconds=timeout_seconds)
+        except HTTPError as exc:
+            if exc.code == 401:
+                continue
+            return False
+        return False
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate default market research source pack.")
     parser.add_argument("--source-pack", type=Path, default=DEFAULT_SOURCE_PACK_PATH)
     parser.add_argument("--timeout-seconds", type=int, default=15)
     parser.add_argument("--write", action="store_true")
+    parser.add_argument(
+        "--remove-unauthorized",
+        action="store_true",
+        help="Drop sources returning HTTP 401 twice; keep other failures. Use --write to save.",
+    )
     args = parser.parse_args()
 
     result = validate_source_pack(
         args.source_pack,
         timeout_seconds=args.timeout_seconds,
         write=args.write,
+        remove_unauthorized=args.remove_unauthorized,
     )
     print(json.dumps(result, sort_keys=True))
 

@@ -94,6 +94,71 @@ saving time. Completed reports and sent chunks are persisted, with up to
 The old `REFRESH_REPORT_ENABLED` setting is ignored. Operator error alerts remain controlled
 separately by `RUNTIME_ALERT_TELEGRAM_CHAT_ID`.
 
+## Market news and sentiment alerts
+
+Jev, accessed through OpenRouter, evaluates collected evidence and chooses `immediate_alert`,
+`daily_report`, or `ignore`. It is a decision model, not a news feed. Existing providers supply
+news and sentiment observations. Alerts preserve links, uncertainty, and the research-only boundary.
+
+Apply `alembic upgrade head` before starting the scheduler; migration `0007_market_alerts` adds
+article provider metadata and durable events, decisions, budget reservations, sentiment snapshots,
+and delivery records. Configure `.env`:
+
+```dotenv
+OPENROUTER_API_KEY=
+MARKET_ALERTS_ENABLED=false
+MARKET_ALERT_SHADOW_MODE=true
+MARKET_ALERT_CHAT_ID=0
+JEV_MODEL=typesafe/jev-1.14
+JEV_MONTHLY_BUDGET_USD=5
+JEV_REQUEST_RESERVE_USD=0.025
+```
+
+Set a valid key and enable alerts to begin assessment. Keep shadow mode enabled while reviewing
+results; shadow assessment still spends inference budget but sends no alert messages. Disable shadow mode to deliver alerts using the existing Telegram bot token and daily-report
+destination. `MARKET_ALERT_CHAT_ID=0` reuses `DAILY_RESEARCH_REPORT_CHAT_ID`, then the most
+recent known chat when that setting is also zero; set a nonzero alert chat ID only to override it. Daily research delivery remains independently configured at
+18:00 America/Toronto by default and includes available alert/sentiment context.
+
+The fast collector polls globally owned breaking sources every `MARKET_ALERT_POLL_SECONDS=60`
+seconds, subject to each source's `alert_poll_seconds` and provider interval limits. A source can
+opt in with `alert_enabled=true`, opt out with `false`, and impose a
+`provider_min_interval_seconds` floor. Paid providers also retain `fetch_interval_seconds`.
+Collection uses separate alert timestamps and leaves embeddings and summaries to normal refresh.
+Missing publication timestamps remain missing; they do not establish urgent freshness.
+
+Delivery defaults include a 30-minute freshness limit, 0.70 minimum confidence, 60-minute cooldown,
+and five alerts per hour. Configure `MARKET_ALERT_MAX_AGE_MINUTES`, `MARKET_ALERT_MIN_CONFIDENCE`,
+`MARKET_ALERT_COOLDOWN_MINUTES`, and `MARKET_ALERT_MAX_PER_HOUR`. Optional quiet hours use
+`MARKET_ALERT_QUIET_START`, `MARKET_ALERT_QUIET_END` (`HH:MM`) and `MARKET_ALERT_TIMEZONE`;
+`MARKET_ALERT_CRITICAL_OVERRIDE=true` permits qualifying critical alerts through quiet hours.
+Monthly Jev reservations are shared across workers. Budget exhaustion stops paid assessment;
+unknown request costs conservatively consume the reservation. This limit covers Jev assessment,
+not other providers or the existing research model calls.
+
+Operator commands:
+
+```bash
+news-agent-alerts check-credentials
+news-agent-alerts inspect
+news-agent-alerts once
+news-agent-alerts cleanup-unauthorized
+news-agent-alerts cleanup-unauthorized --write
+```
+
+The credential check uses OpenRouter's [current-key endpoint](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key)
+and makes no paid model request. It prints only a safe status, never the token or raw response.
+A successful check verifies authentication, not model access. Environment variables take precedence
+over `.env`; after rotating a key, update any exported value and restart bot/scheduler processes.
+Use `OPENROUTER_API_KEY`, not `OPENROUTER_API`.
+
+`once` requires alerts enabled and follows the same shadow and delivery policies as the scheduler.
+`inspect` shows counts/statuses without article text or Telegram payloads. Source cleanup defaults
+to a dry run; `--write` disables only persisted, confirmed HTTP 401 sources and preserves article
+history. Repeated typed source 401s are quarantined automatically. A Jev/OpenRouter 401 instead
+requires credential repair; deleting news sources cannot fix an expired model key. A Telegram send
+with an uncertain outcome is marked `unknown` and is not automatically replayed, avoiding duplicates.
+
 ## Telegram commands
 
 | Area | Commands |

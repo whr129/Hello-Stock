@@ -9,6 +9,8 @@ from typing import Any, Literal
 from openai import APIError, AsyncOpenAI
 from pydantic import ValidationError
 
+from news_agent.harness.contracts import BudgetExceeded
+from news_agent.harness.runtime import current_runtime
 from news_agent.llm_contracts import ReflectionResponse, strict_response_format
 from news_agent.settings import Settings
 
@@ -70,7 +72,7 @@ class ReflectionService:
             )
 
         try:
-            response = await self.client.chat.completions.create(
+            arguments = dict(
                 model=self.settings.openai_model,
                 messages=[
                     {"role": "system", "content": REFLECTION_PROMPT},
@@ -83,10 +85,23 @@ class ReflectionService:
                 ),
                 timeout=self.settings.llm_timeout_seconds,
             )
+            runtime = current_runtime()
+            create = self.client.chat.completions.create
+            response = (
+                await runtime.executor.model_completion(
+                    create, context=runtime.context, **arguments
+                )
+                if runtime
+                else await create(**arguments)
+            )
             parsed = ReflectionResponse.model_validate_json(
                 response.choices[0].message.content or "{}"
             )
-        except (APIError, TypeError, ValueError, ValidationError):
+        except BudgetExceeded:
+            return ReflectionDecision(
+                verdict="pass", reason="reflection run budget exhausted", status="budget_exceeded"
+            )
+        except (APIError, TypeError, ValueError, ValidationError, TimeoutError):
             logger.exception("answer reflection failed")
             return ReflectionDecision(
                 verdict="pass",

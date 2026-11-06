@@ -224,6 +224,7 @@ class PolygonNewsProvider:
                     "source_id": source.id,
                     "publisher": item.get("publisher"),
                     "tickers": item.get("tickers"),
+                    "insights": item.get("insights"),
                 },
             )
             for item in items

@@ -1,11 +1,22 @@
-import json
 import logging
 from datetime import UTC, datetime, timedelta
 
 from openai import AsyncOpenAI
+from pydantic import Field, TypeAdapter
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from news_agent.app.state import AgentResult, SupervisorState
+from news_agent.harness import CapabilityRegistry, CapabilitySpec, Executor, HarnessConfig, ToolCall
+from news_agent.harness.config import ProfileConfig
+from news_agent.harness.contracts import Contract
+from news_agent.harness.runtime import (
+    Runtime,
+    current_runtime,
+    execute_model_batch,
+    model_call,
+    result_text,
+    runtime_scope,
+)
 from news_agent.memory.embeddings import EmbeddingService
 from news_agent.observability.runtime import RuntimeTraceService
 from news_agent.research.analysis import explain_candidates, visible_candidate_explanations
@@ -55,68 +66,46 @@ Web research:
 
 logger = logging.getLogger(__name__)
 
+
+class SignalsArguments(Contract):
+    tickers: list[str] | None = None
+
+
+class ArticlesArguments(Contract):
+    query: str
+    ticker: str = ""
+
+
+class CompanyArgument(Contract):
+    ticker: str
+    company_name: str = ""
+    theme: str = ""
+
+
+class CompaniesArguments(Contract):
+    companies: list[CompanyArgument] = Field(default_factory=list)
+
+
+class SearchArguments(Contract):
+    query: str
+
+
+RESEARCH_TOOLS = {
+    "stored_signals": (SignalsArguments, "Fetch stored market signals and evidence for tickers."),
+    "stored_articles": (ArticlesArguments, "Search stored articles and summaries."),
+    "company_web_research": (CompaniesArguments, "Fetch fresh research for up to three companies."),
+    "general_web_search": (SearchArguments, "Answer a market question with cited live web search."),
+}
 RESEARCH_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "stored_signals",
-            "description": "Fetch stored market signals and evidence for tickers.",
-            "parameters": {
-                "type": "object",
-                "properties": {"tickers": {"type": "array", "items": {"type": "string"}}},
-                "required": ["tickers"],
-            },
+            "name": name,
+            "description": description,
+            "parameters": model.model_json_schema(),
         },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "stored_articles",
-            "description": "Semantic search over stored articles and summaries.",
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}, "ticker": {"type": "string"}},
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "company_web_research",
-            "description": "Fetch fresh web research for up to three companies.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "companies": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "ticker": {"type": "string"},
-                                "company_name": {"type": "string"},
-                                "theme": {"type": "string"},
-                            },
-                            "required": ["ticker"],
-                        },
-                    }
-                },
-                "required": ["companies"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "general_web_search",
-            "description": "Answer a general market question with cited live web search.",
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"],
-            },
-        },
-    },
+    }
+    for name, (model, description) in RESEARCH_TOOLS.items()
 ]
 
 
@@ -314,9 +303,11 @@ class ResearchSubagent:
             and self.research_llm_client is not None
         ):
             try:
-                web_packets, llm_search_results, stored_evidence_text = (
-                    await self._run_research_tool_loop(plan, query_text, state)
-                )
+                (
+                    web_packets,
+                    llm_search_results,
+                    stored_evidence_text,
+                ) = await self._run_research_tool_loop(plan, query_text, state)
             except Exception:
                 logger.exception("optional research LLM planning failed")
 
@@ -326,10 +317,7 @@ class ResearchSubagent:
                 web_packets,
             )
         company_packets = []
-        if (
-            should_enrich_research(plan, enrichment_candidates, self.settings)
-            and not web_packets
-        ):
+        if should_enrich_research(plan, enrichment_candidates, self.settings) and not web_packets:
             web_step_id = await self._start_iteration_step(
                 state,
                 "research:web_company_fanout",
@@ -341,11 +329,40 @@ class ResearchSubagent:
                     ),
                 },
             )
-            company_packets = await self.company_research.research_many(
-                enrichment_candidates,
-                query=plan.query,
-                horizon=plan.research_horizon,
-            )
+            runtime = current_runtime()
+            if runtime:
+                context = runtime.context.model_copy(
+                    update={
+                        "data": {
+                            **runtime.context.data,
+                            "research_state": state,
+                        }
+                    }
+                )
+                result = await runtime.executor.execute(
+                    ToolCall(
+                        id=f"company-enrichment-{context.budget.calls}",
+                        capability_id="company_web_research",
+                        arguments={
+                            "companies": [
+                                {"ticker": item.ticker, "theme": item.theme or ""}
+                                for item in enrichment_candidates
+                                if item.ticker
+                            ][:3]
+                        },
+                    ),
+                    context,
+                )
+                if result.ok:
+                    company_packets = TypeAdapter(list[CompanyResearchPacket]).validate_python(
+                        result.data.get("packets", [])
+                    )
+            else:
+                company_packets = await self.company_research.research_many(
+                    enrichment_candidates,
+                    query=plan.query,
+                    horizon=plan.research_horizon,
+                )
             await self._finish_iteration_step(
                 web_step_id,
                 {
@@ -387,6 +404,22 @@ class ResearchSubagent:
             if synthesis:
                 response = synthesis
 
+        if self.settings.market_alerts_enabled:
+            from news_agent.alerts.service import MarketAlertService
+
+            alerts = MarketAlertService(self.session_factory, self.settings)
+            try:
+                alert_context = await alerts.report_context(
+                    datetime.now(UTC),
+                    ticker=plan.entities.tickers[0]
+                    if plan.task_type == "stock_lookup" and plan.entities.tickers
+                    else None,
+                )
+                if alert_context:
+                    response = f"{response}\n\n{alert_context}"
+            finally:
+                await alerts.aclose()
+
         return {
             "response": response,
             "metadata": {
@@ -415,6 +448,30 @@ class ResearchSubagent:
         query_text: str,
         state: SupervisorState,
     ) -> tuple[list[CompanyResearchPacket], list[str], str]:
+        runtime = current_runtime()
+        if runtime is None:
+            registry = CapabilityRegistry()
+            registry.register_many(self.capabilities())
+            executor = Executor(registry)
+            context = executor.context(
+                principal="local", allowed_capabilities=registry.ids, data={"research_state": state}
+            )
+            profile = ProfileConfig(
+                exposed_tools=list(registry.ids), allowed_capabilities=list(registry.ids)
+            )
+            with runtime_scope(Runtime(executor, context, HarnessConfig(), profile)):
+                return await self._run_research_tool_loop(plan, query_text, state)
+        context = runtime.context.model_copy(
+            update={
+                "data": {**runtime.context.data, "research_state": state},
+            }
+        )
+        agent_config = runtime.config.agents.get("research")
+        model_config = runtime.config.models.get(agent_config.model) if agent_config else None
+        allowed = set(RESEARCH_TOOLS) & context.allowed_capabilities
+        if agent_config:
+            allowed = set(agent_config.tools) & context.allowed_capabilities
+        schemas = context.registry_snapshot.catalog(allowed)
         messages: list[dict[str, object]] = [
             {
                 "role": "system",
@@ -429,11 +486,17 @@ class ResearchSubagent:
         company_packets: list[CompanyResearchPacket] = []
         search_texts: list[str] = []
         stored_sections: list[str] = []
+        if agent_config and agent_config.prompt:
+            messages[0]["content"] = agent_config.prompt
         for _ in range(4):
-            response = await self.research_llm_client.chat.completions.create(
-                model=self.research_llm_model,
+            response = await runtime.executor.model_completion(
+                self.research_llm_client.chat.completions.create,
+                context=context,
+                model=model_config.resolve_model(runtime.environ)
+                if model_config
+                else self.research_llm_model,
                 messages=messages,
-                tools=RESEARCH_TOOL_SCHEMAS,
+                tools=schemas,
                 tool_choice="auto",
                 temperature=0,
                 timeout=self.settings.llm_timeout_seconds,
@@ -460,123 +523,155 @@ class ResearchSubagent:
                     ],
                 }
             )
-            for call in message.tool_calls:
-                try:
-                    args = json.loads(call.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                content, packets = await self._run_research_tool(
-                    call.function.name,
-                    args,
-                    plan,
-                    state,
+            results = await execute_model_batch(
+                runtime,
+                [model_call(call) for call in message.tool_calls],
+                context,
+                allowed,
+            )
+            for call, result in zip(message.tool_calls, results, strict=True):
+                payload = result.data if result.ok and isinstance(result.data, dict) else {}
+                content = payload.get("text", result_text(result))
+                packets = TypeAdapter(list[CompanyResearchPacket]).validate_python(
+                    payload.get("packets", [])
                 )
-                if call.function.name == "company_web_research":
-                    company_packets.extend(packets)
-                elif call.function.name == "general_web_search":
+                company_packets.extend(packets)
+                if call.function.name == "general_web_search":
                     search_texts.append(content)
-                elif call.function.name in {"stored_signals", "stored_articles"}:
+                elif not packets:
                     stored_sections.append(content)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
         return company_packets, search_texts, "\n\n".join(stored_sections)
 
-    async def _run_research_tool(
-        self,
-        name: str,
-        args: object,
-        plan,
-        state: SupervisorState,
-    ) -> tuple[str, list[CompanyResearchPacket]]:
+    def capabilities(self):
+        specs = []
+        for name, (model, description) in RESEARCH_TOOLS.items():
+            method = getattr(self, f"_tool_{name}")
+
+            async def handler(args, context, method=method):
+                state = context.data.get("research_state", {})
+                plan = self.planner.plan(
+                    command=state.get("command", "/candidates"),
+                    args=state.get("args", []),
+                    message_text=state.get("message_text", ""),
+                )
+                content, packets = await method(args.model_dump(), plan, state)
+                return {
+                    "text": content,
+                    "packets": TypeAdapter(list[CompanyResearchPacket]).dump_python(
+                        packets, mode="json"
+                    ),
+                }
+
+            specs.append(
+                CapabilitySpec(
+                    id=name,
+                    description=description,
+                    input_model=model,
+                    handler=handler,
+                    timeout_seconds=60,
+                )
+            )
+        return specs
+
+    async def _run_research_tool(self, name, args, plan, state):
+        # Compatibility entry point; the model loop dispatches through typed registrations.
+        if name not in RESEARCH_TOOLS:
+            return f"Unknown tool '{name}'.", []
         try:
             if not isinstance(args, dict):
                 raise ValueError("arguments must be an object")
-            if name == "stored_signals":
-                raw_tickers = args.get("tickers")
-                if raw_tickers is not None and (
-                    not isinstance(raw_tickers, list)
-                    or not all(isinstance(ticker, str) for ticker in raw_tickers)
-                ):
-                    raise ValueError("tickers must be an array of strings")
-                tickers = [ticker.upper() for ticker in (raw_tickers or plan.entities.tickers)]
-                async with self.session_factory() as session:
-                    repository = MarketSignalRepository(session)
-                    if len(tickers) == 1:
-                        snapshots = await repository.fetch_signal_history(tickers[0])
-                    else:
-                        snapshots = await repository.fetch_top_candidates()
-                explanations = await validate_candidate_links(
-                    explain_candidates(
-                        snapshots,
-                        min_strong_sources=self.settings.signal_min_strong_evidence_sources,
-                    )
-                )
-                return (
-                    format_candidates(
-                        explanations,
-                        max_evidence_items=self.settings.research_report_max_evidence_items,
-                    ),
-                    [],
-                )
-            if name == "stored_articles":
-                embedding = await self.embedding_service.embed_text(str(args.get("query", "")))
-                async with self.session_factory() as session:
-                    articles = await ArticleRepository(session).semantic_search(
-                        query_embedding=embedding,
-                        limit=5,
-                        ticker=str(args.get("ticker") or "") or None,
-                    )
-                if not articles:
-                    return "No relevant stored articles were found.", []
-                return (
-                    "\n\n".join(
-                        f"{article.title} "
-                        f"({(article.published_at or article.created_at):%Y-%m-%d})\n"
-                        f"URL: {article.url}\n"
-                        f"{(article.extracted_text or article.title)[:1200]}"
-                        for article in articles
-                    ),
-                    [],
-                )
-            if name == "company_web_research":
-                companies = args.get("companies")
-                if companies is None:
-                    companies = []
-                if not isinstance(companies, list):
-                    raise ValueError("companies must be an array of objects")
-                for item in companies:
-                    if not isinstance(item, dict) or any(
-                        not isinstance(item.get(field, ""), str)
-                        for field in ("ticker", "company_name", "theme")
-                    ):
-                        raise ValueError("companies must contain objects with string fields")
-                selected = [item for item in companies if item.get("ticker", "").strip()][:3]
-                candidates = [
-                    CandidateExplanation(
-                        ticker=str(item.get("ticker", "")).upper(),
-                        theme=str(item.get("theme", "")) or None,
-                        rank=0,
-                        total_score=0.0,
-                        components={},
-                        evidence=[],
-                        weak_evidence=[],
-                    )
-                    for item in selected
-                ]
-                packets = await self.company_research.research_many(
-                    candidates,
-                    query=str(plan.query or state.get("message_text", "")),
-                    horizon=plan.research_horizon,
-                )
-                return "\n\n".join(self._packet_text(packet) for packet in packets), packets
-            if name == "general_web_search":
-                result = await self.general_search_service.search(
-                    str(args.get("query", "")),
-                    state.get("user_context", {}),
-                )
-                return result.answer, []
+            return await getattr(self, f"_tool_{name}")(args, plan, state)
         except Exception as error:
             return f"Tool '{name}' failed: {error}", []
-        return f"Unknown tool '{name}'.", []
+
+    async def _tool_stored_signals(self, args, plan, state):
+        raw_tickers = args.get("tickers")
+        if raw_tickers is not None and (
+            not isinstance(raw_tickers, list)
+            or not all(isinstance(ticker, str) for ticker in raw_tickers)
+        ):
+            raise ValueError("tickers must be an array of strings")
+        tickers = [ticker.upper() for ticker in (raw_tickers or plan.entities.tickers)]
+        async with self.session_factory() as session:
+            repository = MarketSignalRepository(session)
+            if len(tickers) == 1:
+                snapshots = await repository.fetch_signal_history(tickers[0])
+            else:
+                snapshots = await repository.fetch_top_candidates()
+        explanations = await validate_candidate_links(
+            explain_candidates(
+                snapshots,
+                min_strong_sources=self.settings.signal_min_strong_evidence_sources,
+            )
+        )
+        return (
+            format_candidates(
+                explanations,
+                max_evidence_items=self.settings.research_report_max_evidence_items,
+            ),
+            [],
+        )
+
+    async def _tool_stored_articles(self, args, plan, state):
+        embedding = await self.embedding_service.embed_text(str(args.get("query", "")))
+        async with self.session_factory() as session:
+            articles = await ArticleRepository(session).semantic_search(
+                query_embedding=embedding,
+                limit=5,
+                ticker=str(args.get("ticker") or "") or None,
+            )
+        if not articles:
+            return "No relevant stored articles were found.", []
+        return (
+            "\n\n".join(
+                f"{article.title} "
+                f"({(article.published_at or article.created_at):%Y-%m-%d})\n"
+                f"URL: {article.url}\n"
+                f"{(article.extracted_text or article.title)[:1200]}"
+                for article in articles
+            ),
+            [],
+        )
+
+    async def _tool_company_web_research(self, args, plan, state):
+        companies = args.get("companies")
+        if companies is None:
+            companies = []
+        if not isinstance(companies, list):
+            raise ValueError("companies must be an array of objects")
+        for item in companies:
+            if not isinstance(item, dict) or any(
+                not isinstance(item.get(field, ""), str)
+                for field in ("ticker", "company_name", "theme")
+            ):
+                raise ValueError("companies must contain objects with string fields")
+        selected = [item for item in companies if item.get("ticker", "").strip()][:3]
+        candidates = [
+            CandidateExplanation(
+                ticker=str(item.get("ticker", "")).upper(),
+                theme=str(item.get("theme", "")) or None,
+                rank=0,
+                total_score=0.0,
+                components={},
+                evidence=[],
+                weak_evidence=[],
+            )
+            for item in selected
+        ]
+        packets = await self.company_research.research_many(
+            candidates,
+            query=str(plan.query or state.get("message_text", "")),
+            horizon=plan.research_horizon,
+        )
+        return "\n\n".join(self._packet_text(packet) for packet in packets), packets
+
+    async def _tool_general_web_search(self, args, plan, state):
+        result = await self.general_search_service.search(
+            str(args.get("query", "")),
+            state.get("user_context", {}),
+        )
+        return result.answer, []
 
     @staticmethod
     def _packet_text(packet: CompanyResearchPacket) -> str:
@@ -630,21 +725,44 @@ class ResearchSubagent:
         )
         return candidates
 
+    def _web_research_permitted(self):
+        runtime = current_runtime()
+        if runtime is None:
+            return True
+        configured = runtime.config.agents.get("research")
+        return "company_web_research" in runtime.context.allowed_capabilities and (
+            configured is None or "company_web_research" in configured.tools
+        )
+
     async def _synthesize_report(self, *, stored_evidence: str, web_research: str) -> str:
         try:
-            response = await self.research_llm_client.chat.completions.create(
-                model=self.research_llm_model,
-                messages=[
+            runtime = current_runtime()
+            agent = runtime.config.agents.get("research") if runtime else None
+            model = (
+                runtime.config.models[agent.model].resolve_model(runtime.environ)
+                if agent
+                else self.research_llm_model
+            )
+            arguments = {
+                "model": model,
+                "messages": [
                     {
                         "role": "user",
                         "content": RESEARCH_SYNTHESIS_PROMPT.format(
-                            stored_evidence=stored_evidence[:6000],
-                            web_research=web_research[:6000],
+                            stored_evidence=stored_evidence[:6000], web_research=web_research[:6000]
                         ),
                     }
                 ],
-                temperature=0,
-                timeout=self.settings.llm_timeout_seconds,
+                "temperature": 0,
+                "timeout": self.settings.llm_timeout_seconds,
+            }
+            create = self.research_llm_client.chat.completions.create
+            response = (
+                await runtime.executor.model_completion(
+                    create, context=runtime.context, **arguments
+                )
+                if runtime
+                else await create(**arguments)
             )
             return (response.choices[0].message.content or "").strip()
         except Exception:

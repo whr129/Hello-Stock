@@ -12,6 +12,9 @@ from news_agent.agent.tools import build_main_tools
 from news_agent.app.state import SupervisorState
 from news_agent.domains.news.subagent import NewsSubagent
 from news_agent.domains.runtime.subagent import RuntimeSubagent
+from news_agent.harness import ToolCall
+from news_agent.harness.runtime import current_runtime
+from news_agent.harness.service import StockNewsHarness, effective_settings
 from news_agent.memory.consolidation import MemoryConsolidationService
 from news_agent.memory.embeddings import EmbeddingService
 from news_agent.memory.short_term import (
@@ -87,6 +90,9 @@ class SupervisorNodes:
         self.alert_service = RuntimeAlertService(session_factory, settings)
 
     async def load_user_context(self, state: SupervisorState) -> SupervisorState:
+        runtime = current_runtime()
+        if runtime is not None and runtime.profile.memory == "disabled":
+            return {**state, "user_context": {}, "messages": []}
         query_embedding = await self.embedding_service.embed_text(state.get("message_text", ""))
         async with self.session_factory() as session:
             user = await UserRepository(session, self.settings).get_or_create_user(
@@ -155,8 +161,35 @@ class SupervisorNodes:
             "metadata": metadata,
         }
 
+    async def _run_domain(self, name, agent, state):
+        runtime = current_runtime()
+        if runtime is None:
+            return await agent.run(state)
+        runtime.context.data["user_context"] = state.get("user_context", {})
+        runtime.context.data["supervisor_state"] = state
+        result = await runtime.executor.execute(
+            ToolCall(
+                id=f"command-{name}-{runtime.context.budget.calls}",
+                capability_id=f"command.{name}",
+                arguments={
+                    "command": state.get("command", ""),
+                    "args": state.get("args", []),
+                    "message_text": state.get("message_text", ""),
+                },
+            ),
+            runtime.context,
+        )
+        return (
+            result.data
+            if result.ok
+            else {
+                "response": result.error or "Capability unavailable.",
+                "metadata": {"status": result.status},
+            }
+        )
+
     async def run_news_agent(self, state: SupervisorState) -> SupervisorState:
-        result = await self.news_agent.run(state)
+        result = await self._run_domain("news", self.news_agent, state)
         return {
             **state,
             "news_result": result,
@@ -165,7 +198,7 @@ class SupervisorNodes:
         }
 
     async def run_runtime_agent(self, state: SupervisorState) -> SupervisorState:
-        result = await self.runtime_agent.run(state)
+        result = await self._run_domain("runtime", self.runtime_agent, state)
         return {
             **state,
             "runtime_result": result,
@@ -174,7 +207,7 @@ class SupervisorNodes:
         }
 
     async def run_research_agent(self, state: SupervisorState) -> SupervisorState:
-        result = await self.research_agent.run(state)
+        result = await self._run_domain("research", self.research_agent, state)
         return {
             **state,
             "research_result": result,
@@ -188,6 +221,10 @@ class SupervisorNodes:
             if state.get("metadata", {}).get("reflection_retry")
             else ""
         )
+        runtime = current_runtime()
+        if runtime is not None:
+            runtime.context.data["user_context"] = state.get("user_context", {})
+            runtime.context.data["supervisor_state"] = state
         answer, tool_log = await self.main_agent.run(
             message_text=state.get("message_text", ""),
             user_context=state.get("user_context", {}),
@@ -298,6 +335,9 @@ class SupervisorNodes:
         }
 
     async def persist_session(self, state: SupervisorState) -> SupervisorState:
+        runtime = current_runtime()
+        if runtime is not None and runtime.profile.memory == "disabled":
+            return {**state, "user_context": {}, "messages": []}
         text = state.get("message_text", "")
         response = state.get("final_response", "")
         short_term_state = {"messages": list(state.get("messages", []))}
@@ -456,7 +496,10 @@ class SupervisorNodes:
 
 
 def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settings):
-    nodes = SupervisorNodes(session_factory, settings)
+    harness = StockNewsHarness(session_factory, settings)
+    nodes = SupervisorNodes(
+        session_factory, effective_settings(settings, harness.config, "interactive")
+    )
     graph = StateGraph(SupervisorState)
 
     graph.add_node("load_user_context", nodes.traced("load_user_context", nodes.load_user_context))
@@ -516,7 +559,24 @@ def build_supervisor_graph(session_factory: async_sessionmaker, settings: Settin
         },
     )
     graph.add_edge("persist_session", END)
-    return graph.compile()
+    return HarnessGraph(graph.compile(), harness)
+
+
+class HarnessGraph:
+    """Keep one registry, shared budget and MCP lifecycle across reflection retries."""
+
+    def __init__(self, graph, harness):
+        self.graph = graph
+        self.harness = harness
+
+    async def ainvoke(self, state, *args, **kwargs):
+        context = self.harness.context(
+            principal=f"telegram:{state.get('telegram_user_id', 'anonymous')}",
+            data={"user_context": state.get("user_context", {})},
+        )
+        async with self.harness.scope(context):
+            return await self.graph.ainvoke(state, *args, **kwargs)
+
 
 def _workflow_trigger(state: SupervisorState) -> str | None:
     return state.get("command") or state.get("intent")
@@ -533,9 +593,7 @@ def _state_metadata(state: SupervisorState) -> dict[str, object]:
 def _step_metadata(state: SupervisorState) -> dict[str, object]:
     return {
         "route_capabilities": list(state.get("route", {}).get("capabilities", [])),
-        "main_agent_tool_calls": list(
-            state.get("metadata", {}).get("main_agent_tool_calls", [])
-        ),
+        "main_agent_tool_calls": list(state.get("metadata", {}).get("main_agent_tool_calls", [])),
         "reflection_attempts": int(state.get("reflection_attempts", 0) or 0),
         "reflection_decision": dict(state.get("reflection_decision", {})),
         "reflection_exhausted": bool(state.get("reflection_exhausted", False)),

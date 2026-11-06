@@ -3,6 +3,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from news_agent.alerts import storage as alert_storage  # noqa: F401
 from news_agent.settings import get_settings
 from news_agent.storage.models import Base
 

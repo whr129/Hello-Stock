@@ -53,18 +53,19 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_DB: news_agent
+          POSTGRES_DB: news_agent_alert_tests
           POSTGRES_USER: news_agent
           POSTGRES_PASSWORD: news_agent
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U news_agent -d news_agent"
+          --health-cmd "pg_isready -U news_agent -d news_agent_alert_tests"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql+asyncpg://news_agent:news_agent@localhost:5432/news_agent
+      DATABASE_URL: postgresql+asyncpg://news_agent:news_agent@localhost:5432/news_agent_alert_tests
+      NEWS_AGENT_TEST_DATABASE_URL: postgresql+asyncpg://news_agent:news_agent@localhost:5432/news_agent_alert_tests
       OPENAI_API_KEY: ""
       TELEGRAM_BOT_TOKEN: ""
     steps:

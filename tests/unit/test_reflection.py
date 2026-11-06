@@ -96,3 +96,25 @@ async def test_reflection_service_invalid_model_response_passes_unavailable() ->
 
     assert decision.verdict == "pass"
     assert decision.status == "unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget", ["turns", "tokens"])
+async def test_reflection_cannot_request_model_after_shared_budget_exhausted(budget):
+    from news_agent.harness import CapabilityRegistry, Executor, HarnessConfig
+    from news_agent.harness.config import ProfileConfig
+    from news_agent.harness.runtime import Runtime, runtime_scope
+
+    class Completions:
+        async def create(self, **kwargs):
+            pytest.fail("Exhausted reflection must not call the provider")
+
+    executor = Executor(CapabilityRegistry())
+    context = executor.context(principal="fixture", allowed_capabilities=set())
+    setattr(context.budget, budget, getattr(context.budget, f"max_{budget}"))
+    service = ReflectionService(Settings(_env_file=None, openai_api_key=""))
+    service.client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+    with runtime_scope(Runtime(executor, context, HarnessConfig(), ProfileConfig(), {})):
+        decision = await service.reflect({"message_text": "research"})
+    assert decision.status == "budget_exceeded"
+    assert decision.verdict == "pass"

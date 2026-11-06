@@ -8,10 +8,12 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from news_agent.graph.state import SchedulerState
 from news_agent.ingestion.dedupe import content_hash
+from news_agent.ingestion.errors import http_error_status
 from news_agent.ingestion.market_impact import MarketImpactClassifier
 from news_agent.ingestion.providers import IngestProviderRegistry
 from news_agent.markets.yahoo import YahooMarketDataProvider
@@ -32,7 +34,7 @@ from news_agent.research.scheduler import (
 )
 from news_agent.research.source_health import score_source_health, source_is_suppressed
 from news_agent.settings import Settings
-from news_agent.storage.models import JobRun, Source
+from news_agent.storage.models import Article, JobRun, Source
 from news_agent.storage.repositories import (
     ArticleRepository,
     EmbeddingRepository,
@@ -500,6 +502,8 @@ class SchedulerNodes:
                         fetched_at=datetime.now(UTC),
                         success=False,
                         error=str(exc),
+                        http_status=http_error_status(exc),
+                        disable_unauthorized=self.settings.source_disable_unauthorized,
                     )
                     await session.commit()
 
@@ -682,6 +686,7 @@ class SchedulerNodes:
                     extracted_text=text,
                     author=item.get("author"),
                     related_tickers=related_tickers,
+                    provider_metadata=dict(item.get("provider_metadata") or {}),
                 )
                 if created:
                     quality["saved"] += 1
@@ -760,92 +765,66 @@ class SchedulerNodes:
             logger.info("scheduler skipping embeddings for market price pipeline")
             return {**state, "summaries": state.get("summaries", [])}
 
-        saved_articles = state.get("saved_articles", [])
-        if not saved_articles:
-            logger.info("scheduler skipping article embeddings; no new articles")
-            return state
-
-        logger.info(
-            "scheduler storing article embeddings",
-            extra={"saved_article_count": len(saved_articles)},
-        )
         async with self.session_factory() as session:
-            repo = EmbeddingRepository(session)
-            for article in saved_articles:
-                logger.info(
-                    "scheduler embedding article article_id=%s title=%s",
-                    article["id"],
-                    article["title"][:80],
-                )
-                embedding = await asyncio.wait_for(
-                    self.embedding_service.embed_text(
-                        f"{article['title']}\n{article.get('text', '')}"
-                    ),
-                    timeout=self.settings.llm_timeout_seconds,
-                )
-                await repo.save_article_embedding(
-                    article_id=article["id"],
-                    embedding=embedding,
+            backlog = await ArticleRepository(session).list_without_embeddings(limit=20)
+            article_ids = dict.fromkeys(
+                [item["id"] for item in state.get("saved_articles", [])]
+                + [item.id for item in backlog]
+            )
+        for article_id in article_ids:
+            async with self.session_factory() as session:
+                article = await session.get(Article, article_id)
+                if article is None:
+                    continue
+                expected_revision = article.revision
+                text = f"{article.title}\n{article.extracted_text or ''}"
+            embedding = await asyncio.wait_for(
+                self.embedding_service.embed_text(text), timeout=self.settings.llm_timeout_seconds,
+            )
+            async with self.session_factory() as session:
+                await EmbeddingRepository(session).save_article_embedding(
+                    article_id=article_id, embedding=embedding,
                     embedding_model=self.settings.embedding_model,
+                    expected_article_revision=expected_revision,
                 )
-            await session.commit()
-
-        logger.info(
-            "scheduler stored article embeddings",
-            extra={"embedding_count": len(saved_articles)},
-        )
+                await session.commit()
         return state
 
     async def precompute_summaries(self, state: SchedulerState) -> SchedulerState:
         pipeline_scope = _pipeline_scope(state.get("job_type", ""), state.get("pipeline_scope"))
         if pipeline_scope == "market_prices":
-            logger.info("scheduler skipping summaries for market price pipeline")
             return {**state, "summaries": []}
-
-        summaries: list[str] = []
         async with self.session_factory() as session:
             articles = await ArticleRepository(session).list_without_summaries(limit=20)
-            logger.info(
-                "scheduler precomputing summaries",
-                extra={"article_count": len(articles)},
+        summaries: list[str] = []
+        for article in articles:
+            expected_revision = getattr(article, "revision", 1)
+            summary_text = await asyncio.wait_for(
+                self.summarizer.summarize_article(SummaryRequest(
+                    title=article.title, text=article.extracted_text or article.title,
+                    source=str(article.source_id or "unknown"),
+                )), timeout=self.settings.llm_timeout_seconds,
             )
-            summary_repo = SummaryRepository(session)
-            for article in articles:
-                text = article.extracted_text or article.title
-                logger.info(
-                    "scheduler summarizing article article_id=%s title=%s timeout=%ss",
-                    article.id,
-                    article.title[:80],
-                    self.settings.llm_timeout_seconds,
-                )
-                summary_text = await asyncio.wait_for(
-                    self.summarizer.summarize_article(
-                        SummaryRequest(
-                            title=article.title,
-                            text=text,
-                            source=str(article.source_id or "unknown"),
-                        )
-                    ),
-                    timeout=self.settings.llm_timeout_seconds,
-                )
-                summary = await summary_repo.save_article_summary(
-                    article_id=article.id,
-                    text=summary_text,
-                    model_name=self.settings.openai_model,
-                )
-                logger.info("scheduler embedding summary summary_id=%s", summary.id)
-                embedding = await asyncio.wait_for(
-                    self.embedding_service.embed_text(summary_text),
-                    timeout=self.settings.llm_timeout_seconds,
+            embedding = await asyncio.wait_for(
+                self.embedding_service.embed_text(summary_text),
+                timeout=self.settings.llm_timeout_seconds,
+            )
+            async with self.session_factory() as session:
+                revision = (await session.execute(
+                    select(Article.revision).where(Article.id == article.id).with_for_update()
+                )).scalar_one_or_none()
+                if revision != expected_revision:
+                    continue
+                summary = await SummaryRepository(session).save_article_summary(
+                    article_id=article.id, article_revision=expected_revision,
+                    text=summary_text, model_name=self.settings.openai_model,
                 )
                 await EmbeddingRepository(session).save_summary_embedding(
-                    summary.id,
-                    embedding,
-                    self.settings.embedding_model,
+                    summary.id, embedding, self.settings.embedding_model,
+                    expected_article_revision=expected_revision,
                 )
+                await session.commit()
                 summaries.append(summary_text)
-            await session.commit()
-        logger.info("scheduler stored summaries", extra={"summary_count": len(summaries)})
         return {**state, "summaries": summaries}
 
     async def extract_mentions(self, state: SchedulerState) -> SchedulerState:
