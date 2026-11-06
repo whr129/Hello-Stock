@@ -77,6 +77,9 @@ class Article(Base):
     category: Mapped[str] = mapped_column(String(64), default="general")
     related_tickers: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -96,6 +99,7 @@ class Summary(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     article_id: Mapped[int | None] = mapped_column(ForeignKey("articles.id"), nullable=True)
+    article_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     summary_type: Mapped[str] = mapped_column(String(64), default="article")
     text: Mapped[str] = mapped_column(Text)
@@ -154,7 +158,8 @@ class MarketEntity(Base):
 class MarketMention(Base):
     __tablename__ = "market_mentions"
     __table_args__ = (
-        UniqueConstraint("article_id", "ticker", "theme", name="uq_market_mentions_article_signal"),
+        UniqueConstraint("article_id", "article_revision", "ticker", "theme",
+                         name="uq_market_mentions_article_signal"),
         Index("ix_market_mentions_ticker_theme", "ticker", "theme"),
         Index("ix_market_mentions_source_family", "source_family"),
     )
@@ -166,6 +171,7 @@ class MarketMention(Base):
     source_family: Mapped[str] = mapped_column(String(64), default="news")
     source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id"), nullable=True)
     article_id: Mapped[int | None] = mapped_column(ForeignKey("articles.id"), nullable=True)
+    article_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     summary_id: Mapped[int | None] = mapped_column(ForeignKey("summaries.id"), nullable=True)
     mention_count: Mapped[int] = mapped_column(Integer, default=1)
     sentiment: Mapped[float | None] = mapped_column(Float, nullable=True)

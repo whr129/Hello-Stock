@@ -43,7 +43,9 @@ async def extract_market_mentions(
             article_id=article.id,
             source_id=article.source_id,
         ):
-            await repository.save(_to_model(mention))
+            await repository.save(
+                _to_model(mention, article_revision=getattr(article, "revision", 1))
+            )
             saved += 1
 
     for summary, summary_article, source in await repository.list_summaries_for_extraction(
@@ -61,7 +63,9 @@ async def extract_market_mentions(
             summary_id=summary.id,
             source_id=summary_article.source_id if summary_article else None,
         ):
-            await repository.save(_to_model(mention))
+            await repository.save(
+                _to_model(mention, article_revision=getattr(summary, "article_revision", 1))
+            )
             saved += 1
 
     return saved
@@ -141,13 +145,14 @@ async def backfill_signal_evidence_links(session: AsyncSession, *, limit: int = 
     return await MarketSignalRepository(session).backfill_evidence_links(limit=limit)
 
 
-def _to_model(mention) -> MarketMention:
+def _to_model(mention, *, article_revision: int = 1) -> MarketMention:
     return MarketMention(
         ticker=mention.ticker,
         theme=mention.theme,
         source_family=mention.source_family,
         source_id=mention.source_id,
         article_id=mention.article_id,
+        article_revision=article_revision,
         summary_id=mention.summary_id,
         mention_count=mention.mention_count,
         trust_score=mention.trust_score,

@@ -1,0 +1,70 @@
+{
+  "budget_consumed_usd": 0.00228018,
+  "cases_attempted": 36,
+  "cases_completed": 36,
+  "cases_expected": 36,
+  "confidence_coverage": 0.8055555555555556,
+  "confidence_threshold": 0.85,
+  "confident_urgent_precision": 1.0,
+  "confident_urgent_predicted": 8,
+  "confident_urgent_recall": 0.6666666666666666,
+  "cost_missing_count": 0,
+  "failure_codes": {},
+  "gate_criteria": "Complete live corpus; route accuracy >=90%; raw, host-eligible, and confidence-qualified urgent precision >=90%; at least one urgent prediction in each group.",
+  "host_confidence_threshold": 0.85,
+  "host_precision_recall_target_passed": false,
+  "host_urgent_precision": 1.0,
+  "host_urgent_predicted": 8,
+  "host_urgent_recall": 0.6666666666666666,
+  "input_tokens": 54290,
+  "limitations": "Synthetic diagnostic corpus, not production prevalence or calibrated confidence. Explicit as_of/history context is supplied. No trade outcomes, source verification, Telegram, or database evaluated. Host guards run on fixture trust/primary annotations, which are benchmark assumptions, not verified news.",
+  "max_cost_usd": 0.04,
+  "mode": "live_provider",
+  "model_versions": [
+    "typesafe/jev-1.14-20261014"
+  ],
+  "output_tokens": 9335,
+  "prompt_version": "market-alert-v2",
+  "provider_failures": 0,
+  "quality_gate_passed": true,
+  "reported_cost_usd": 0.00228018,
+  "route_accuracy": 0.9444444444444444,
+  "sentiment_accuracy": 0.8918918918918919,
+  "sentiment_by_label": {
+    "mixed": {
+      "precision": 1.0,
+      "predicted": 1,
+      "recall": 1.0,
+      "support": 1
+    },
+    "negative": {
+      "precision": 0.8571428571428571,
+      "predicted": 14,
+      "recall": 1.0,
+      "support": 12
+    },
+    "neutral": {
+      "precision": 0.8888888888888888,
+      "predicted": 9,
+      "recall": 0.8888888888888888,
+      "support": 9
+    },
+    "positive": {
+      "precision": 1.0,
+      "predicted": 7,
+      "recall": 1.0,
+      "support": 7
+    },
+    "unknown": {
+      "precision": 0.8333333333333334,
+      "predicted": 6,
+      "recall": 0.625,
+      "support": 8
+    }
+  },
+  "stop_reason": null,
+  "urgent_expected": 12,
+  "urgent_precision": 1.0,
+  "urgent_predicted": 12,
+  "urgent_recall": 1.0
+}

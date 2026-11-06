@@ -1,7 +1,7 @@
 from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_MARKET_RESEARCH_SECTOR_CONFIG: str = (
@@ -45,12 +45,55 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
+    telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN", repr=False)
     database_url: str = Field(
         default="postgresql+asyncpg://news_agent:news_agent@localhost:5432/news_agent",
         alias="DATABASE_URL",
+        repr=False,
     )
-    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY", repr=False)
+    openrouter_api_key: SecretStr = Field(
+        default=SecretStr(""), alias="OPENROUTER_API_KEY", repr=False
+    )
+    harness_config_file: str = Field(default="", alias="HARNESS_CONFIG_FILE")
+    market_alerts_enabled: bool = Field(default=False, alias="MARKET_ALERTS_ENABLED")
+    market_alert_shadow_mode: bool = Field(default=True, alias="MARKET_ALERT_SHADOW_MODE")
+    market_alert_chat_id: int = Field(default=0, alias="MARKET_ALERT_CHAT_ID")
+    market_alert_poll_seconds: int = Field(default=60, ge=10, alias="MARKET_ALERT_POLL_SECONDS")
+    market_alert_dispatch_seconds: int = Field(
+        default=5, ge=1, alias="MARKET_ALERT_DISPATCH_SECONDS"
+    )
+    market_alert_max_age_minutes: int = Field(
+        default=30, ge=1, alias="MARKET_ALERT_MAX_AGE_MINUTES"
+    )
+    market_alert_min_confidence: float = Field(
+        default=0.70, ge=0, le=1, alias="MARKET_ALERT_MIN_CONFIDENCE"
+    )
+    market_alert_cooldown_minutes: int = Field(
+        default=60, ge=0, alias="MARKET_ALERT_COOLDOWN_MINUTES"
+    )
+    market_alert_max_per_hour: int = Field(default=5, ge=1, alias="MARKET_ALERT_MAX_PER_HOUR")
+    market_alert_concurrency: int = Field(default=4, ge=1, le=32, alias="MARKET_ALERT_CONCURRENCY")
+    market_alert_max_attempts: int = Field(default=3, ge=1, le=5, alias="MARKET_ALERT_MAX_ATTEMPTS")
+    market_alert_lease_seconds: int = Field(default=120, ge=30, alias="MARKET_ALERT_LEASE_SECONDS")
+    market_alert_quiet_start: str = Field(default="", alias="MARKET_ALERT_QUIET_START")
+    market_alert_quiet_end: str = Field(default="", alias="MARKET_ALERT_QUIET_END")
+    market_alert_timezone: str = Field(default="America/Toronto", alias="MARKET_ALERT_TIMEZONE")
+    market_alert_critical_override: bool = Field(
+        default=True, alias="MARKET_ALERT_CRITICAL_OVERRIDE"
+    )
+    jev_model: str = Field(default="typesafe/jev-1.14", alias="JEV_MODEL")
+    jev_timeout_seconds: int = Field(default=15, ge=1, le=60, alias="JEV_TIMEOUT_SECONDS")
+    jev_monthly_budget_usd: float = Field(default=5, ge=0, alias="JEV_MONTHLY_BUDGET_USD")
+    jev_request_reserve_usd: float = Field(
+        default=0.025, ge=0.001, alias="JEV_REQUEST_RESERVE_USD"
+    )
+    sentiment_min_stories: int = Field(default=5, ge=2, alias="SENTIMENT_MIN_STORIES")
+    sentiment_min_sources: int = Field(default=2, ge=2, alias="SENTIMENT_MIN_SOURCES")
+    sentiment_change_threshold: float = Field(
+        default=0.4, gt=0, le=2, alias="SENTIMENT_CHANGE_THRESHOLD"
+    )
+    source_disable_unauthorized: bool = Field(default=True, alias="SOURCE_DISABLE_UNAUTHORIZED")
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
     general_search_model: str = Field(default="", alias="GENERAL_SEARCH_MODEL")
     general_search_max_sources: int = Field(default=5, alias="GENERAL_SEARCH_MAX_SOURCES")
@@ -197,9 +240,9 @@ class Settings(BaseSettings):
         default=2,
         alias="SOURCE_FETCH_RETRY_BACKOFF_SECONDS",
     )
-    alpha_vantage_api_key: str = Field(default="", alias="ALPHA_VANTAGE_API_KEY")
-    finnhub_api_key: str = Field(default="", alias="FINNHUB_API_KEY")
-    polygon_api_key: str = Field(default="", alias="POLYGON_API_KEY")
+    alpha_vantage_api_key: str = Field(default="", alias="ALPHA_VANTAGE_API_KEY", repr=False)
+    finnhub_api_key: str = Field(default="", alias="FINNHUB_API_KEY", repr=False)
+    polygon_api_key: str = Field(default="", alias="POLYGON_API_KEY", repr=False)
     market_fetch_max_attempts: int = Field(default=2, alias="MARKET_FETCH_MAX_ATTEMPTS")
     market_fetch_retry_backoff_seconds: int = Field(
         default=2,
@@ -284,13 +327,24 @@ class Settings(BaseSettings):
     eval_output_path: str = Field(default="reports/eval", alias="EVAL_OUTPUT_PATH")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-    @field_validator("daily_research_report_timezone")
+    @field_validator("daily_research_report_timezone", "market_alert_timezone")
     @classmethod
     def validate_report_timezone(cls, value: str) -> str:
         try:
             ZoneInfo(value)
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError("Use an IANA timezone such as America/Toronto or UTC") from exc
+        return value
+
+    @field_validator("market_alert_quiet_start", "market_alert_quiet_end")
+    @classmethod
+    def validate_quiet_time(cls, value: str) -> str:
+        if not value:
+            return value
+        import re
+
+        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value):
+            raise ValueError("Use HH:MM or an empty string")
         return value
 
     @property
@@ -300,4 +354,12 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if settings.harness_config_file:
+        from news_agent.harness.config import load_harness_config
+        from news_agent.harness.service import effective_settings
+
+        settings = effective_settings(
+            settings, load_harness_config(settings.harness_config_file), None,
+        )
+    return settings

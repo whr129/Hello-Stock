@@ -4,7 +4,8 @@ from datetime import UTC, datetime, timedelta
 from typing import SupportsFloat, SupportsIndex
 from uuid import UUID as PythonUUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from news_agent.research.source_health import update_source_health_metrics
@@ -220,6 +221,7 @@ class SourceRepository:
         field_mapping: dict | None = None,
         fetch_mode: str | None = None,
         trust_score: float | None = None,
+        reactivate: bool = True,
     ) -> Source:
         normalized_provider = provider.strip().lower()
         normalized_account = external_account.strip()
@@ -227,7 +229,12 @@ class SourceRepository:
         existing = await self.session.execute(select(Source).where(Source.url == locator))
         source = existing.scalar_one_or_none()
         if source:
-            source.enabled = True
+            if reactivate:
+                source.enabled = True
+                source.config = {
+                    key: value for key, value in dict(source.config or {}).items()
+                    if key not in {"unauthorized_failures", "quarantined_http_status"}
+                }
             source.provider = normalized_provider
             source.external_account = normalized_account
             if config:
@@ -241,21 +248,23 @@ class SourceRepository:
             await self.session.flush()
             return source
 
-        source = Source(
-            name=name,
-            url=locator,
-            provider=normalized_provider,
-            external_account=normalized_account,
-            config=dict(config or {}),
-            field_mapping=dict(field_mapping or {}),
-            fetch_mode=fetch_mode or ("rss" if normalized_provider == "rss" else None),
-            category=category,
-            owner_user_id=owner_user_id,
-            trust_score=trust_score if trust_score is not None else 0.5,
+        await self.session.execute(
+            insert(Source).values(
+                name=name,
+                url=locator,
+                provider=normalized_provider,
+                external_account=normalized_account,
+                config=dict(config or {}),
+                field_mapping=dict(field_mapping or {}),
+                fetch_mode=fetch_mode or ("rss" if normalized_provider == "rss" else None),
+                category=category,
+                owner_user_id=owner_user_id,
+                trust_score=trust_score if trust_score is not None else 0.5,
+            ).on_conflict_do_nothing(index_elements=["url"])
         )
-        self.session.add(source)
-        await self.session.flush()
-        return source
+        return (
+            await self.session.execute(select(Source).where(Source.url == locator))
+        ).scalar_one()
 
     async def disable_source(self, source_id: int, owner_user_id: int) -> bool:
         result = await self.session.execute(
@@ -295,6 +304,8 @@ class SourceRepository:
         fetched_at: datetime,
         success: bool,
         error: str | None = None,
+        http_status: int | None = None,
+        disable_unauthorized: bool = False,
     ) -> None:
         source = await self.get_by_id(source_id)
         if source is None:
@@ -310,6 +321,17 @@ class SourceRepository:
                 failed=1,
                 checked_at=fetched_at,
             )
+        config = dict(source.config or {})
+        if http_status is not None:
+            config["last_http_status"] = http_status
+        if not success and http_status == 401:
+            config["unauthorized_failures"] = int(config.get("unauthorized_failures", 0)) + 1
+            if disable_unauthorized and config["unauthorized_failures"] >= 2:
+                source.enabled = False
+                config["quarantined_http_status"] = 401
+        else:
+            config.pop("unauthorized_failures", None)
+        source.config = config
         await self.session.flush()
 
     async def record_source_quality(
@@ -375,6 +397,7 @@ class SourceRepository:
                         or ("rss" if provider in {"rss", "twitter", "newsletter"} else provider)
                     ),
                     trust_score=float(trust_score),
+                    reactivate=False,
                 )
             )
         return sources
@@ -414,34 +437,77 @@ class ArticleRepository:
         extracted_text: str | None = None,
         author: str | None = None,
         related_tickers: Sequence[str] | None = None,
+        provider_metadata: dict | None = None,
     ) -> tuple[Article, bool]:
-        result = await self.session.execute(select(Article).where(Article.url == url))
-        article = result.scalar_one_or_none()
-        if article:
-            return article, False
-
-        article = Article(
-            source_id=source_id,
-            url=url,
-            title=title,
-            author=author,
-            published_at=published_at,
-            content_hash=content_hash,
-            category=category,
-            extracted_text=extracted_text,
-            related_tickers=[ticker.upper() for ticker in related_tickers or []],
+        inserted_id = (
+            await self.session.execute(
+                insert(Article).values(
+                    source_id=source_id, url=url, title=title, author=author,
+                    published_at=published_at, content_hash=content_hash, category=category,
+                    extracted_text=extracted_text,
+                    related_tickers=[ticker.upper() for ticker in related_tickers or []],
+                    provider_metadata=dict(provider_metadata or {}),
+                ).on_conflict_do_nothing(index_elements=["url"]).returning(Article.id)
+            )
+        ).scalar_one_or_none()
+        article = (
+            await self.session.execute(
+                select(Article).where(Article.url == url).with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        if inserted_id is not None:
+            return article, True
+        content_changed = (
+            article.title != title or article.content_hash != content_hash
+            or (extracted_text is not None and article.extracted_text != extracted_text)
         )
-        self.session.add(article)
+        metadata = dict(article.provider_metadata or {})
+        metadata.update(provider_metadata or {})
+        metadata_changed = metadata != (article.provider_metadata or {})
+        if not content_changed and not metadata_changed:
+            return article, False
+        article.provider_metadata = metadata
+        if content_changed:
+            article.title = title
+            article.content_hash = content_hash
+            if extracted_text is not None:
+                article.extracted_text = extracted_text
+            if published_at is not None:
+                article.published_at = published_at
+            if author is not None:
+                article.author = author
+            article.category = category
+            if related_tickers is not None:
+                article.related_tickers = sorted({ticker.upper() for ticker in related_tickers})
+            article.revision += 1
+            article.updated_at = datetime.now(UTC)
+            # Embeddings can be regenerated; summaries/mentions remain historical evidence.
+            await self.session.execute(delete(ArticleEmbedding).where(
+                ArticleEmbedding.article_id == article.id
+            ))
+            summary_ids = select(Summary.id).where(Summary.article_id == article.id)
+            await self.session.execute(delete(SummaryEmbedding).where(
+                SummaryEmbedding.summary_id.in_(summary_ids)
+            ))
         await self.session.flush()
         return article, True
 
-    async def list_without_summaries(self, limit: int = 20) -> list[Article]:
-        summarized = select(Summary.article_id).where(Summary.article_id.is_not(None))
+    async def list_without_embeddings(self, limit: int = 20) -> list[Article]:
+        embedded = select(ArticleEmbedding.article_id)
         result = await self.session.execute(
-            select(Article)
-            .where(Article.id.not_in(summarized))
-            .order_by(Article.published_at.desc().nullslast(), Article.created_at.desc())
-            .limit(limit)
+            select(Article).where(Article.id.not_in(embedded))
+            .order_by(Article.created_at, Article.id).limit(limit)
+        )
+        return list(result.scalars())
+
+    async def list_without_summaries(self, limit: int = 20) -> list[Article]:
+        summarized = select(Summary.id).where(
+            Summary.article_id == Article.id, Summary.article_revision == Article.revision
+        ).exists()
+        result = await self.session.execute(
+            select(Article).where(~summarized)
+            .order_by(Article.updated_at.desc(), Article.id).limit(limit)
         )
         return list(result.scalars())
 
@@ -528,6 +594,7 @@ class MarketMentionRepository:
             result = await self.session.execute(
                 select(MarketMention).where(
                     MarketMention.article_id == mention.article_id,
+                    MarketMention.article_revision == (mention.article_revision or 1),
                     MarketMention.ticker == mention.ticker,
                     MarketMention.theme == mention.theme,
                 )
@@ -540,17 +607,15 @@ class MarketMentionRepository:
         return mention
 
     async def list_articles_for_extraction(
-        self,
-        *,
-        limit: int = 50,
+        self, *, limit: int = 50,
     ) -> list[tuple[Article, Source | None]]:
-        processed = select(MarketMention.article_id).where(MarketMention.article_id.is_not(None))
+        processed = select(MarketMention.id).where(
+            MarketMention.article_id == Article.id,
+            MarketMention.article_revision == Article.revision,
+        ).exists()
         result = await self.session.execute(
-            select(Article, Source)
-            .outerjoin(Source, Source.id == Article.source_id)
-            .where(Article.id.not_in(processed))
-            .order_by(Article.published_at.desc().nullslast(), Article.created_at.desc())
-            .limit(limit)
+            select(Article, Source).outerjoin(Source, Source.id == Article.source_id)
+            .where(~processed).order_by(Article.updated_at.desc(), Article.id).limit(limit)
         )
         return list(result.all())
 
@@ -565,6 +630,7 @@ class MarketMentionRepository:
             .outerjoin(Article, Article.id == Summary.article_id)
             .outerjoin(Source, Source.id == Article.source_id)
             .where(Summary.id.not_in(processed))
+            .where(or_(Article.id.is_(None), Summary.article_revision == Article.revision))
             .order_by(Summary.created_at.desc())
             .limit(limit)
         )
@@ -576,6 +642,7 @@ class MarketMentionRepository:
             .outerjoin(Article, Article.id == MarketMention.article_id)
             .outerjoin(Source, Source.id == MarketMention.source_id)
             .where(MarketMention.created_at >= since)
+            .where(or_(Article.id.is_(None), MarketMention.article_revision == Article.revision))
             .order_by(MarketMention.created_at.desc())
         )
         grouped: dict[tuple[str | None, str | None], list[MarketMention]] = {}
@@ -616,7 +683,9 @@ class MarketMentionRepository:
     async def top_tickers(self, *, since: datetime, limit: int = 25) -> list[str]:
         result = await self.session.execute(
             select(MarketMention.ticker, func.sum(MarketMention.mention_count).label("mentions"))
+            .outerjoin(Article, Article.id == MarketMention.article_id)
             .where(MarketMention.created_at >= since)
+            .where(or_(Article.id.is_(None), MarketMention.article_revision == Article.revision))
             .where(MarketMention.ticker.is_not(None))
             .group_by(MarketMention.ticker)
             .order_by(func.sum(MarketMention.mention_count).desc())
@@ -836,9 +905,15 @@ class SummaryRepository:
         text: str,
         model_name: str,
         model_provider: str = "openai",
+        article_revision: int | None = None,
     ) -> Summary:
+        if article_revision is None:
+            article_revision = (await self.session.execute(
+                select(Article.revision).where(Article.id == article_id)
+            )).scalar_one_or_none() or 1
         summary = Summary(
             article_id=article_id,
+            article_revision=article_revision,
             summary_type="article",
             text=text,
             model_provider=model_provider,
@@ -866,26 +941,41 @@ class EmbeddingRepository:
         self.session = session
 
     async def save_article_embedding(
-        self, article_id: int, embedding: list[float], embedding_model: str
-    ) -> ArticleEmbedding:
+        self, article_id: int, embedding: list[float], embedding_model: str,
+        *, expected_article_revision: int | None = None,
+    ) -> ArticleEmbedding | None:
+        revision = (await self.session.execute(
+            select(Article.revision).where(Article.id == article_id).with_for_update()
+        )).scalar_one_or_none()
+        if revision is None or (expected_article_revision is not None
+                                and revision != expected_article_revision):
+            return None
         item = ArticleEmbedding(
-            article_id=article_id,
-            embedding=embedding,
-            embedding_model=embedding_model,
-            chunk_metadata={},
+            article_id=article_id, embedding=embedding, embedding_model=embedding_model,
+            chunk_metadata={"article_revision": revision},
         )
         self.session.add(item)
         await self.session.flush()
         return item
 
     async def save_summary_embedding(
-        self, summary_id: int, embedding: list[float], embedding_model: str
-    ) -> SummaryEmbedding:
+        self, summary_id: int, embedding: list[float], embedding_model: str,
+        *, expected_article_revision: int | None = None,
+    ) -> SummaryEmbedding | None:
+        summary = await self.session.get(Summary, summary_id)
+        if summary is None:
+            return None
+        if summary.article_id is not None:
+            revision = (await self.session.execute(
+                select(Article.revision).where(Article.id == summary.article_id).with_for_update()
+            )).scalar_one_or_none()
+            if revision != summary.article_revision or (
+                expected_article_revision is not None and revision != expected_article_revision
+            ):
+                return None
         item = SummaryEmbedding(
-            summary_id=summary_id,
-            embedding=embedding,
-            embedding_model=embedding_model,
-            chunk_metadata={},
+            summary_id=summary_id, embedding=embedding, embedding_model=embedding_model,
+            chunk_metadata={"article_revision": summary.article_revision},
         )
         self.session.add(item)
         await self.session.flush()

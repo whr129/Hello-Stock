@@ -80,3 +80,4 @@ Thumbs.db
 *.bak
 *.orig
 *.rej
+.state/mcp-oauth/

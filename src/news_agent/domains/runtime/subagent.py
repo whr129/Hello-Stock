@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -131,9 +132,18 @@ class RuntimeSubagent:
             return _response(_format_runs(runs))
 
     async def _recent_alerts(self) -> AgentResult:
+        market = []
+        decisions = []
         async with self.session_factory() as session:
             alerts = await RuntimeAlertRepository(session).list_recent(limit=10)
-        if not alerts:
+            if self.settings.market_alerts_enabled:
+                from news_agent.alerts.storage import AlertRepository
+
+                repository = AlertRepository(session)
+                since = datetime.now(UTC) - timedelta(hours=24)
+                market = await repository.list_recent_deliveries(since=since, limit=10)
+                decisions = await repository.list_recent_decisions(since=since, limit=5)
+        if not alerts and not market and not decisions:
             return {
                 "response": "No runtime alerts recorded yet.",
                 "metadata": {"capability": "runtime_alerts"},
@@ -143,6 +153,16 @@ class RuntimeSubagent:
             lines.append(
                 f"- run {alert.run_id}: {alert.status} via {alert.channel}"
             )
+        if market or decisions:
+            lines.append("Market alerts:")
+            for item in market:
+                lines.append(f"- delivery {item.id}: {item.kind}, {item.status}")
+            for item in decisions:
+                reason = item.last_error or (item.result or {}).get("guard", {}).get("reason", "")
+                lines.append(
+                    f"- Jev decision {item.id}: {item.delivery_choice or item.status}"
+                    + (f" ({reason})" if reason else "")
+                )
         return {"response": "\n".join(lines), "metadata": {"capability": "runtime_alerts"}}
 
 

@@ -1,0 +1,44 @@
+schema_version = 1
+
+[execution]
+max_parallel_calls = 4
+max_calls_per_run = 20
+max_agent_depth = 2
+max_turns = 10
+max_tokens = 32000
+deadline_seconds = 120
+
+[models.chat]
+driver = "openai"
+model_env = "OPENAI_MODEL"
+
+[agents.main]
+model = "chat"
+tools = ["web_search", "research_agent", "runtime_agent", "news_admin", "memory_search", "research.report"]
+
+[agents.research]
+model = "chat"
+tools = ["stored_signals", "stored_articles", "company_web_research", "general_web_search"]
+
+[profiles.interactive]
+exposed_tools = ["web_search", "research_agent", "runtime_agent", "news_admin", "memory_search", "research.report"]
+
+[profiles.cli]
+memory = "disabled"
+exposed_tools = ["web_search", "research_agent", "runtime_agent", "research.report"]
+
+[profiles.scheduled]
+memory = "disabled"
+
+# MCP tools require an explicit effect policy and inclusion in the relevant profile's
+# allowed_capabilities. Add them to exposed_tools and agents.main.tools to expose them
+# to the main model; agents.research.tools controls research-agent delegation.
+# [mcp.market]
+# url_env = "MARKET_MCP_URL"
+# required = false
+# allowed_tools = ["quote"]
+# [mcp.market.auth]
+# mode = "bearer_env"
+# token_env = "MARKET_MCP_TOKEN"
+# [mcp.market.tool_policy.quote]
+# effect = "read"

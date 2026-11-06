@@ -35,3 +35,13 @@ Deterministic fallback checks answer shape, not answer quality. See the
 
 The offline suite does not prove live feed availability, model answer quality, PostgreSQL
 transaction behavior, or pgvector retrieval. CI separately validates database migrations.
+
+Alert transaction and pipeline tests require a disposable PostgreSQL database named
+`news_agent_alert_tests` on localhost, with pgvector available. These tests truncate alert
+tables and exercise migration downgrade/upgrade; never point them at application data.
+CI runs them on its dedicated database for both Python versions. Locally:
+
+```bash
+NEWS_AGENT_TEST_DATABASE_URL=postgresql+asyncpg://news_agent:news_agent@localhost:5433/news_agent_alert_tests \
+  PYTHONPATH=src .venv/bin/pytest -q
+```

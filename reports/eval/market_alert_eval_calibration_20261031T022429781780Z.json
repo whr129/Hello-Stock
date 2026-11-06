@@ -1,0 +1,81 @@
+{
+  "source": "reports/eval/market_alert_eval_20261031T022429781780Z.jsonl",
+  "cases": 36,
+  "expected_urgent": 12,
+  "points": [
+    {
+      "threshold": 0.0,
+      "raw_predicted": 12,
+      "raw_precision": 1.0,
+      "raw_recall": 1.0,
+      "host_predicted": 11,
+      "host_precision": 1.0,
+      "host_recall": 0.9166666666666666
+    },
+    {
+      "threshold": 0.5,
+      "raw_predicted": 12,
+      "raw_precision": 1.0,
+      "raw_recall": 1.0,
+      "host_predicted": 11,
+      "host_precision": 1.0,
+      "host_recall": 0.9166666666666666
+    },
+    {
+      "threshold": 0.6,
+      "raw_predicted": 12,
+      "raw_precision": 1.0,
+      "raw_recall": 1.0,
+      "host_predicted": 11,
+      "host_precision": 1.0,
+      "host_recall": 0.9166666666666666
+    },
+    {
+      "threshold": 0.7,
+      "raw_predicted": 12,
+      "raw_precision": 1.0,
+      "raw_recall": 1.0,
+      "host_predicted": 11,
+      "host_precision": 1.0,
+      "host_recall": 0.9166666666666666
+    },
+    {
+      "threshold": 0.8,
+      "raw_predicted": 10,
+      "raw_precision": 1.0,
+      "raw_recall": 0.8333333333333334,
+      "host_predicted": 9,
+      "host_precision": 1.0,
+      "host_recall": 0.75
+    },
+    {
+      "threshold": 0.85,
+      "raw_predicted": 6,
+      "raw_precision": 1.0,
+      "raw_recall": 0.5,
+      "host_predicted": 5,
+      "host_precision": 1.0,
+      "host_recall": 0.4166666666666667
+    },
+    {
+      "threshold": 0.9,
+      "raw_predicted": 4,
+      "raw_precision": 1.0,
+      "raw_recall": 0.3333333333333333,
+      "host_predicted": 3,
+      "host_precision": 1.0,
+      "host_recall": 0.25
+    },
+    {
+      "threshold": 0.95,
+      "raw_predicted": 0,
+      "raw_precision": null,
+      "raw_recall": 0.0,
+      "host_predicted": 0,
+      "host_precision": null,
+      "host_recall": 0.0
+    }
+  ],
+  "operating_threshold_unchanged": 0.85,
+  "limitations": "Post-hoc sensitivity analysis on a small synthetic corpus, not calibrated probabilities or production error rates. No threshold selected or deployment behavior changed."
+}

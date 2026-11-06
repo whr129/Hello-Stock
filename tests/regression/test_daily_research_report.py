@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from news_agent.research import service as research_service
 from news_agent.research.schemas import CandidateExplanation
 from news_agent.scheduler import reports
 from news_agent.settings import Settings
@@ -16,6 +17,9 @@ NOW = datetime(2026, 9, 20, 22, tzinfo=UTC)  # 18:00 Toronto
 def delivery(monkeypatch):
     runs = {}
     session = AsyncMock()
+    session.add = Mock()
+    session.get.return_value = None
+    session.execute.return_value = Mock(scalar_one_or_none=Mock(return_value=None))
     session.__aenter__.return_value = session
 
     async def get(report_date):
@@ -181,7 +185,7 @@ async def test_daily_report_uses_fresh_signals_and_validated_evidence(delivery, 
         fetch_top_candidates=AsyncMock(return_value=[] if empty else [snapshot]),
         update_snapshot_evidence=AsyncMock(),
     )
-    monkeypatch.setattr(reports, "MarketSignalRepository", lambda _: repository)
+    monkeypatch.setattr(research_service, "MarketSignalRepository", lambda _: repository)
     explanations = [] if empty else [
         CandidateExplanation(
             ticker=ticker, theme=None, rank=index, total_score=80, components={}, evidence=[],
@@ -194,8 +198,8 @@ async def test_daily_report_uses_fresh_signals_and_validated_evidence(delivery, 
     unvalidated = [replace(item, evidence_strength="strong") for item in explanations]
     explain = Mock(return_value=unvalidated)
     validate = AsyncMock(return_value=explanations)
-    monkeypatch.setattr(reports, "explain_candidates", explain)
-    monkeypatch.setattr(reports, "validate_candidate_links", validate)
+    monkeypatch.setattr(research_service, "explain_candidates", explain)
+    monkeypatch.setattr(research_service, "validate_candidate_links", validate)
     delivery.settings.signal_allow_developing_default = False
     service = reports.DailyResearchReportService(delivery.factory, delivery.settings)
     text = await service._build_report("2026-09-20", NOW)
@@ -224,8 +228,10 @@ async def test_daily_report_uses_fresh_signals_and_validated_evidence(delivery, 
 @pytest.mark.asyncio
 async def test_daily_report_preserves_financial_guardrails(delivery, monkeypatch):
     repository = Mock(fetch_top_candidates=AsyncMock(return_value=[]))
-    monkeypatch.setattr(reports, "MarketSignalRepository", lambda _: repository)
-    monkeypatch.setattr(reports, "format_candidates", lambda *args, **kwargs: "You should buy TSLA")
+    monkeypatch.setattr(research_service, "MarketSignalRepository", lambda _: repository)
+    monkeypatch.setattr(
+        research_service, "format_candidates", lambda *args, **kwargs: "You should buy TSLA"
+    )
     service = reports.DailyResearchReportService(delivery.factory, delivery.settings)
 
     text = await service._build_report("2026-09-20", NOW)

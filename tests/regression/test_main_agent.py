@@ -185,7 +185,9 @@ async def test_main_agent_tool_error_becomes_result() -> None:
         message_text="status", user_context={}, tools=custom_tools
     )
     assert answer == "Recovered."
-    assert log[0]["ok"] is False and "boom" in log[0]["result"]
+    assert log[0]["ok"] is False
+    assert "Capability execution failed" in log[0]["result"]
+    assert "boom" not in log[0]["result"]
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,11 @@ dependencies = [
     "langgraph>=0.2.0",
     "numpy>=1.26.0",
     "openai>=2.33.0",
+    "httpx>=0.28.1,<1",
+    "httpx2==2.16.0",
+    "mcp==2.2.0",
+    "jsonschema==4.25.1",
+    "cryptography>=46,<51",
     "pandas>=2.2.0",
     "pgvector>=0.3.0",
     "psycopg[binary]>=3.2.0",
@@ -35,6 +40,8 @@ dev = [
 [project.scripts]
 news-agent = "news_agent.main:main"
 news-agent-scheduler = "news_agent.scheduler.jobs:main"
+news-agent-harness = "news_agent.harness.cli:main"
+news-agent-alerts = "news_agent.alerts.cli:main"
 news-agent-reset-data = "news_agent.maintenance.cleanup:main"
 news-agent-backfill-evidence = "news_agent.maintenance.evidence:main"
 news-agent-validate-sources = "news_agent.maintenance.validate_sources:main"
