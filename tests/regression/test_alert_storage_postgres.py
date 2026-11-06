@@ -3,6 +3,7 @@
 import asyncio
 import os
 import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -39,7 +40,9 @@ def test_migration_round_trip():
         ["downgrade", "0006_market_research_only_cleanup"],
         ["upgrade", "head"],
     ):
-        subprocess.run([".venv/bin/alembic", *command], env=env, check=True, capture_output=True)
+        subprocess.run(
+            [sys.executable, "-m", "alembic", *command], env=env, check=True, capture_output=True
+        )
         if command[0] == "downgrade":
             asyncio.run(_historical_migration_article(insert=True))
     asyncio.run(_historical_migration_article(insert=False))
