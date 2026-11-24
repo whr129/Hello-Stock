@@ -190,6 +190,29 @@ async def test_shadow_records_decision_without_delivery(setup):
     await service._process_decision(1, NOW)
     assert tracker["completion"]["delivery"] is None
     assert tracker["completion"]["result"]["guard"]["reason"] == "shadow_mode"
+    assert tracker["completion"]["result"]["shadow_guard"] == {"allowed": True, "reason": "allowed"}
+
+
+@pytest.mark.asyncio
+async def test_openai_uses_its_key_and_stores_billing_rejection_without_a_retry(setup):
+    previous, client, tracker = setup
+    settings = previous.settings.model_copy(
+        update={"market_alert_decision_provider": "openai", "openai_api_key": "openai-test-key"}
+    )
+    service = MarketAlertService(
+        previous.factory, settings, client=client, repository_type=Repository
+    )
+    assert service.revision.startswith("openai:gpt-6-luna:")
+    assert service.revision != previous.revision
+    client.assess.side_effect = JevError(
+        "billing_limit", status_code=429, usage=JevUsage(input_tokens=0, output_tokens=0, cost=0)
+    )
+    assert await service._process_decision(1, NOW) == "billing_blocked"
+    assert service._billing_blocked_until >= NOW + timedelta(minutes=15)
+    assert tracker["failure"]["retry_at"] is None
+    assert tracker["failure"]["actual_cost_usd"] == 0
+    assert not service._auth_blocked
+    assert "completion" not in tracker
 
 
 @pytest.mark.asyncio

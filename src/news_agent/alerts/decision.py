@@ -126,6 +126,8 @@ class JevDecision(BaseModel):
     probabilities: dict[str, dict[str, Probability]]
     attempts: int = Field(ge=1)
     prompt_version: str = PROMPT_VERSION
+    provider: Literal["jev", "openai"] = "jev"
+    request_id: str | None = None
 
 
 class JevError(Exception):
@@ -141,7 +143,7 @@ class JevError(Exception):
         usage: JevUsage | None = None,
         retry_after_seconds: float = 0,
     ) -> None:
-        super().__init__(f"Jev decision unavailable: {code}")
+        super().__init__(f"Alert decision unavailable: {code}")
         self.code = code
         self.status_code = status_code
         self.retryable = retryable

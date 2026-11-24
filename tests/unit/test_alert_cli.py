@@ -125,3 +125,82 @@ async def test_once_closes_service_and_database_when_collection_fails(monkeypatc
     service.aclose.assert_awaited_once()
     engine.dispose.assert_awaited_once()
     service.process_once.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_openai_preflight_uses_synthetic_decision_without_database(monkeypatch):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.assess.return_value = SimpleNamespace(usage=SimpleNamespace(cost_usd=0.0001))
+    constructor = Mock(return_value=client)
+    monkeypatch.setattr(cli, "OpenAIDecisionClient", constructor)
+    database = Mock(side_effect=AssertionError("must not open database"))
+    monkeypatch.setattr(cli, "create_session_factory", database)
+    settings = Settings(_env_file=None, openai_api_key=SECRET)
+    profile = Mock(return_value=settings.model_copy(
+        update={"market_alert_decision_provider": "jev"},
+    ))
+    monkeypatch.setattr(cli, "resolve_alert_settings", profile)
+    code, report = await cli.run(
+        argparse.Namespace(command="check-credentials", provider="openai"), settings,
+    )
+    assert code == 0 and report["status"] == "valid"
+    assert report["provider"] == "openai"
+    assert report["paid_model_request"] is True
+    assert report["estimated_cost_usd"] == 0.0001
+    assert SECRET not in json.dumps(report)
+    constructor.assert_called_once_with(SECRET)
+    assert client.assess.call_args.args[0]["evidence"] == []
+    client.assess.assert_awaited_once()
+    client.__aexit__.assert_awaited_once()
+    profile.assert_called_once_with(settings)
+    database.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error,expected",
+    [
+        (cli.JevError("billing_limit", status_code=429), "billing_limit"),
+        (cli.JevError(SECRET, status_code=401), "unauthorized"),
+        (cli.JevError(SECRET, status_code=403), "access_denied"),
+        (cli.JevError(SECRET, status_code=404), "access_denied"),
+        (cli.JevError(SECRET, status_code=429), "rate_limited"),
+        (cli.JevError(SECRET, status_code=500), "unavailable"),
+        (RuntimeError(SECRET), "unavailable"),
+    ],
+)
+async def test_openai_preflight_sanitizes_failures(monkeypatch, error, expected):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.assess.side_effect = error
+    monkeypatch.setattr(cli, "OpenAIDecisionClient", Mock(return_value=client))
+    code, report = await cli.check_credentials(Settings(
+        _env_file=None, openai_api_key=SECRET, market_alert_decision_provider="openai",
+    ))
+    assert code == 2 and report["status"] == expected
+    assert SECRET not in json.dumps(report)
+    client.assess.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_openai_missing_key_makes_no_request(monkeypatch):
+    constructor = Mock()
+    monkeypatch.setattr(cli, "OpenAIDecisionClient", constructor)
+    code, report = await cli.check_credentials(Settings(
+        _env_file=None, openai_api_key="", market_alert_decision_provider="openai",
+    ))
+    assert code == 2 and report["status"] == "missing"
+    assert report["paid_model_request"] is False
+    constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_credentials_uses_alert_profile_provider_without_override(monkeypatch):
+    settings = Settings(_env_file=None)
+    profile_settings = settings.model_copy(update={"market_alert_decision_provider": "openai"})
+    monkeypatch.setattr(cli, "resolve_alert_settings", lambda settings: profile_settings)
+    check = AsyncMock(return_value=(0, {"status": "valid"}))
+    monkeypatch.setattr(cli, "check_credentials", check)
+    await cli.run(argparse.Namespace(command="check-credentials", provider=None), settings)
+    check.assert_awaited_once_with(profile_settings)

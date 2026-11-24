@@ -96,16 +96,20 @@ separately by `RUNTIME_ALERT_TELEGRAM_CHAT_ID`.
 
 ## Market news and sentiment alerts
 
-Jev, accessed through OpenRouter, evaluates collected evidence and chooses `immediate_alert`,
+The selected decision provider evaluates collected evidence and chooses `immediate_alert`,
 `daily_report`, or `ignore`. It is a decision model, not a news feed. Existing providers supply
 news and sentiment observations. Alerts preserve links, uncertainty, and the research-only boundary.
+Set `MARKET_ALERT_DECISION_PROVIDER=openai` to use OpenAI directly with `OPENAI_API_KEY`
+and the fixed `gpt-6-luna` decision model. The compatibility default remains `jev` through
+OpenRouter; it is an explicit rollback option, never an automatic fallback.
 
 Apply `alembic upgrade head` before starting the scheduler; migration `0007_market_alerts` adds
 article provider metadata and durable events, decisions, budget reservations, sentiment snapshots,
 and delivery records. Configure `.env`:
 
 ```dotenv
-OPENROUTER_API_KEY=
+OPENAI_API_KEY=
+MARKET_ALERT_DECISION_PROVIDER=openai
 MARKET_ALERTS_ENABLED=false
 MARKET_ALERT_SHADOW_MODE=true
 MARKET_ALERT_CHAT_ID=0
@@ -130,32 +134,51 @@ Missing publication timestamps remain missing; they do not establish urgent fres
 Delivery defaults include a 30-minute freshness limit, 0.70 minimum confidence, 60-minute cooldown,
 and five alerts per hour. Configure `MARKET_ALERT_MAX_AGE_MINUTES`, `MARKET_ALERT_MIN_CONFIDENCE`,
 `MARKET_ALERT_COOLDOWN_MINUTES`, and `MARKET_ALERT_MAX_PER_HOUR`. Optional quiet hours use
-`MARKET_ALERT_QUIET_START`, `MARKET_ALERT_QUIET_END` (`HH:MM`) and `MARKET_ALERT_TIMEZONE`;
-`MARKET_ALERT_CRITICAL_OVERRIDE=true` permits qualifying critical alerts through quiet hours.
-Monthly Jev reservations are shared across workers. Budget exhaustion stops paid assessment;
-unknown request costs conservatively consume the reservation. This limit covers Jev assessment,
+`MARKET_ALERT_QUIET_START`, `MARKET_ALERT_QUIET_END` (`HH:MM`) and `MARKET_ALERT_TIMEZONE`.
+`MARKET_ALERT_CRITICAL_OVERRIDE=true` permits qualifying Jev alerts through quiet hours. OpenAI
+decisions observe quiet hours during this rollout.
+Monthly assessment reservations are shared across workers and both decision providers. Budget exhaustion stops paid assessment;
+unknown request costs conservatively consume the reservation. The existing `JEV_MONTHLY_BUDGET_USD` and `JEV_REQUEST_RESERVE_USD` names apply to both providers.
+This limit covers alert assessment,
 not other providers or the existing research model calls.
 
 Operator commands:
 
 ```bash
 news-agent-alerts check-credentials
+news-agent-alerts check-credentials --provider openai
 news-agent-alerts inspect
 news-agent-alerts once
 news-agent-alerts cleanup-unauthorized
 news-agent-alerts cleanup-unauthorized --write
 ```
 
-The credential check uses OpenRouter's [current-key endpoint](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key)
-and makes no paid model request. It prints only a safe status, never the token or raw response.
-A successful check verifies authentication, not model access. Environment variables take precedence
-over `.env`; after rotating a key, update any exported value and restart bot/scheduler processes.
-Use `OPENROUTER_API_KEY`, not `OPENROUTER_API`.
+The credential check resolves the alert harness profile; `--provider` overrides the provider for
+that preflight only. OpenAI performs one bounded synthetic decision to verify authentication and
+model access. It is a small **paid API call outside the monthly alert budget**, prints estimated
+cost, and creates no event or Telegram delivery. A ChatGPT subscription or promotional credit
+must not be assumed to cover API usage; verify the API project's billing separately.
+The Jev check uses OpenRouter's [current-key endpoint](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key)
+and makes no paid model request; it verifies authentication, not Jev model access. Both print
+only safe status information, never the token or raw response. Environment variables take
+precedence over `.env`; update exported values and restart bot/scheduler processes after changes.
+Jev requires `OPENROUTER_API_KEY`, not `OPENROUTER_API`.
+
+To deploy the OpenAI route after setting the production key, build the image from this revision,
+apply `alembic upgrade head`, and recreate the bot/scheduler with
+`MARKET_ALERT_DECISION_PROVIDER=openai`, `MARKET_ALERTS_ENABLED=true`, and
+`MARKET_ALERT_SHADOW_MODE=true`. Ensure the alerts harness profile does not override these settings.
+Run the credential preflight and use `/alerts` or `inspect` to verify fresh shadow decisions
+while the scheduler runs. Review the outcomes before setting `MARKET_ALERT_SHADOW_MODE=false`
+and recreating the services. Reuse the current Telegram token
+and destination. Shadow decisions and old delivery records are not replayed when enabling delivery;
+verify with fresh evidence. Roll back explicitly with `MARKET_ALERT_DECISION_PROVIDER=jev`
+and a working `OPENROUTER_API_KEY`; OpenAI failures never silently route to Jev.
 
 `once` requires alerts enabled and follows the same shadow and delivery policies as the scheduler.
 `inspect` shows counts/statuses without article text or Telegram payloads. Source cleanup defaults
 to a dry run; `--write` disables only persisted, confirmed HTTP 401 sources and preserves article
-history. Repeated typed source 401s are quarantined automatically. A Jev/OpenRouter 401 instead
+history. Repeated typed source 401s are quarantined automatically. An OpenAI or Jev/OpenRouter 401 instead
 requires credential repair; deleting news sources cannot fix an expired model key. A Telegram send
 with an uncertain outcome is marked `unknown` and is not automatically replayed, avoiding duplicates.
 

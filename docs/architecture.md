@@ -103,10 +103,14 @@ are preserved. Separate alert fetch timestamps leave bulk refresh scheduling ind
 normal embedding stage drains a bounded backlog of unembedded articles.
 
 `alerts/service.py` groups evidence into revisioned events, computes sentiment context, and asks
-Jev through OpenRouter whether to deliver immediately, include in the daily report, or ignore.
+the configured provider whether to deliver immediately, include in the daily report, or ignore.
+`MARKET_ALERT_DECISION_PROVIDER=openai` uses the native OpenAI `gpt-6-luna` decision API
+with `OPENAI_API_KEY`; the compatibility default `jev` uses OpenRouter. Provider selection is
+explicit, with no automatic fallback. Both normalize into the same stored judgment contract,
+share the existing `JEV_*` budget limits, and record provider identity for runtime inspection.
 The harness provides the assessment capability boundary. Freshness, confidence, quiet hours,
 cooldowns, and rate limits still gate delivery. Shadow mode records assessments without sending.
-Jev is not a news source and cannot replace ingestion.
+Decision models are not news sources and cannot replace ingestion.
 
 Migration `0007_market_alerts` stores events/evidence snapshots, decisions, monthly budget
 reservations, sentiment series, and an outbox independently of runtime-log retention. Claims and

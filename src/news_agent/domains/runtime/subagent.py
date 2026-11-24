@@ -158,9 +158,16 @@ class RuntimeSubagent:
             for item in market:
                 lines.append(f"- delivery {item.id}: {item.kind}, {item.status}")
             for item in decisions:
-                reason = item.last_error or (item.result or {}).get("guard", {}).get("reason", "")
+                result = item.result or {}
+                reason = item.last_error or result.get("guard", {}).get("reason", "")
+                if reason == "shadow_mode" and result.get("shadow_guard"):
+                    reason = f"shadow: {result['shadow_guard']['reason']}"
+                provider = result.get("judgment", {}).get("provider") or (
+                    "openai" if item.model_revision.startswith("openai:") else "jev"
+                )
+                label = "OpenAI" if provider == "openai" else "Jev"
                 lines.append(
-                    f"- Jev decision {item.id}: {item.delivery_choice or item.status}"
+                    f"- {label} decision {item.id}: {item.delivery_choice or item.status}"
                     + (f" ({reason})" if reason else "")
                 )
         return {"response": "\n".join(lines), "metadata": {"capability": "runtime_alerts"}}
