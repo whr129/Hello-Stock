@@ -182,3 +182,128 @@ def test_holdout_is_balanced_and_disjoint_from_calibration_corpus():
     }
     assert not ({case.id for case in holdout} & {case.id for case in original})
     assert all(case.synthetic and case.rationale for case in holdout)
+
+
+@pytest.mark.asyncio
+async def test_openai_cost_is_estimated_and_raw_response_not_persisted():
+    result = decision().model_copy(update={"model": "gpt-6-luna"})
+    client = SimpleNamespace(
+        assess=AsyncMock(return_value=result), last_response={"secret": "not-for-report"}
+    )
+    rows, summary = await evaluate_cases(
+        load_cases(max_cases=1), client, max_cost_usd=0.1, provider="openai"
+    )
+    assert rows[0]["reported_cost_usd"] is None
+    assert rows[0]["estimated_cost_usd"] == 0.00001
+    assert rows[0]["cost_basis"] == "estimated"
+    assert "provider_response" not in rows[0]
+    assert summary["estimated_cost_usd"] == 0.00001
+    assert summary["reported_cost_usd"] == 0
+    assert summary["provider"] == "openai"
+    assert summary["quality_gate_passed"]
+
+
+def test_openai_gate_rejects_high_accuracy_with_low_urgent_recall():
+    rows = [row("immediate_alert", "immediate_alert")]
+    rows += [row("immediate_alert", "daily_report")]
+    rows += [row("daily_report", "daily_report") for _ in range(8)]
+    assert summarize(rows, expected_cases=10, provider="jev")["quality_gate_passed"]
+    metrics = summarize(rows, expected_cases=10, provider="openai")
+    assert metrics["route_accuracy"] == 0.9
+    assert metrics["host_urgent_precision"] == 1
+    assert metrics["host_urgent_recall"] == 0.5
+    assert not metrics["quality_gate_passed"]
+
+
+def test_openai_reservation_uses_provider_rate():
+    case = load_cases()[0]
+    assert reservation_usd(case, provider="openai") > reservation_usd(case, provider="jev")
+
+
+@pytest.mark.parametrize("provider", ["openai", "jev"])
+@pytest.mark.parametrize("environment_key", [None, "environment-key"])
+def test_cli_uses_environment_then_cwd_dotenv(
+    monkeypatch, tmp_path, capsys, provider, environment_key
+):
+    import sys
+
+    from news_agent.evaluation import alerts
+
+    key_name = "OPENAI_API_KEY" if provider == "openai" else "OPENROUTER_API_KEY"
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(f"{key_name}=dotenv-key\n")
+    monkeypatch.delenv(key_name, raising=False)
+    if environment_key:
+        monkeypatch.setenv(key_name, environment_key)
+    monkeypatch.setattr(sys, "argv", ["alerts", "--live", "--provider", provider])
+    captured = {}
+
+    class Client:
+        def __init__(self, config):
+            captured["key"] = (
+                config if isinstance(config, str) else config.api_key.get_secret_value()
+            )
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+    if provider == "openai":
+        from news_agent.alerts import openai_decision
+
+        monkeypatch.setattr(openai_decision, "OpenAIDecisionClient", Client)
+    else:
+        monkeypatch.setattr(alerts, "EvaluationJevClient", Client)
+    evaluate = AsyncMock(return_value=([], {"quality_gate_passed": True}))
+    monkeypatch.setattr(alerts, "evaluate_cases", evaluate)
+    monkeypatch.setattr(alerts, "write_reports", lambda *_: (tmp_path / "rows", tmp_path / "sum"))
+    alerts.main()
+    assert captured["key"] == (environment_key or "dotenv-key")
+    assert evaluate.call_args.kwargs["provider"] == provider
+    output = capsys.readouterr().out
+    assert "environment-key" not in output and "dotenv-key" not in output
+
+
+@pytest.mark.asyncio
+async def test_openai_failure_keeps_estimated_usage_and_stops_on_credit_error():
+    client = SimpleNamespace(
+        assess=AsyncMock(
+            side_effect=JevError(
+                "billing",
+                status_code=402,
+                usage=JevUsage(input_tokens=100, output_tokens=0, cost=0.00001),
+            )
+        )
+    )
+    rows, summary = await evaluate_cases(
+        load_cases(max_cases=2), client, max_cost_usd=0.1, provider="openai"
+    )
+    assert client.assess.await_count == 1
+    assert rows[0]["reported_cost_usd"] is None
+    assert rows[0]["estimated_cost_usd"] == 0.00001
+    assert summary["budget_consumed_usd"] == 0.00001
+    assert summary["stop_reason"] == "provider_auth_or_credit"
+    assert not summary["quality_gate_passed"]
+
+
+def test_openai_holdout_is_balanced_synthetic_and_independent():
+    from news_agent.evaluation.alerts import ROOT
+
+    holdout = load_cases(ROOT / "tests/evaluation/market_alert_openai_holdout_cases.jsonl")
+    locked = load_cases() + load_cases(ROOT / "tests/evaluation/market_alert_holdout_cases.jsonl")
+    assert Counter(case.expected_delivery for case in holdout) == {
+        "immediate_alert": 8,
+        "daily_report": 8,
+        "ignore": 8,
+    }
+    assert not ({case.id for case in holdout} & {case.id for case in locked})
+    assert not (
+        {case.state["evidence"][0]["text"] for case in holdout}
+        & {case.state["evidence"][0]["text"] for case in locked}
+    )
+    assert {"correction", "source_ambiguity", "prompt_injection"} <= {
+        case.category for case in holdout
+    }
+    assert all(case.synthetic and case.rationale for case in holdout)

@@ -46,13 +46,17 @@ Source health combines freshness, successful fetches, accepted/saved article vol
 
 ## News and sentiment alerts
 
-Optional market alerts add Jev decisions to stored news and provider sentiment evidence through
-OpenRouter: immediate alert, daily-report context, or ignore. They remain informational and
+Optional market alerts classify stored news and provider sentiment evidence as immediate alert,
+daily-report context, or ignore. Select `MARKET_ALERT_DECISION_PROVIDER=openai` for native OpenAI
+`gpt-6-luna` decisions using `OPENAI_API_KEY`, or `jev` (the compatibility default) for OpenRouter.
+There is no automatic provider fallback. They remain informational and
 preserve evidence links and uncertainty. Missing or stale timestamps cannot establish urgency;
 sentiment changes require enough observations and independent sources. This does not enable
 trading or revive retired watchlist/quote commands.
 
-Alerts start disabled, with shadow mode enabled and a $5 monthly Jev assessment budget.
+Alerts start disabled, with shadow mode enabled and a $5 monthly assessment budget shared by both
+providers under the existing `JEV_MONTHLY_BUDGET_USD` setting. Deploy OpenAI in shadow mode first;
+enabling delivery does not replay shadow decisions.
 Immediate Telegram delivery reuses the existing bot and daily-report destination (with the
 most recent known chat as fallback); `MARKET_ALERT_CHAT_ID` is an optional override. Daily reports keep the configured
 18:00 America/Toronto default. See [setup and operations](../../README.md#market-news-and-sentiment-alerts)

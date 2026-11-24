@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator
@@ -58,6 +59,9 @@ class Settings(BaseSettings):
     harness_config_file: str = Field(default="", alias="HARNESS_CONFIG_FILE")
     market_alerts_enabled: bool = Field(default=False, alias="MARKET_ALERTS_ENABLED")
     market_alert_shadow_mode: bool = Field(default=True, alias="MARKET_ALERT_SHADOW_MODE")
+    market_alert_decision_provider: Literal["jev", "openai"] = Field(
+        default="jev", alias="MARKET_ALERT_DECISION_PROVIDER"
+    )
     market_alert_chat_id: int = Field(default=0, alias="MARKET_ALERT_CHAT_ID")
     market_alert_poll_seconds: int = Field(default=60, ge=10, alias="MARKET_ALERT_POLL_SECONDS")
     market_alert_dispatch_seconds: int = Field(

@@ -11,7 +11,9 @@ from sqlalchemy import func, select
 
 from news_agent.alerts.collector import FastNewsCollector
 from news_agent.alerts.config import resolve_alert_settings
+from news_agent.alerts.decision import JevError
 from news_agent.alerts.delivery import MarketAlertDispatcher
+from news_agent.alerts.openai_decision import OPENAI_DECISION_MODEL, OpenAIDecisionClient
 from news_agent.alerts.service import MarketAlertService
 from news_agent.alerts.storage import MarketAlertDecision, MarketAlertDelivery, MarketAlertEvent
 from news_agent.settings import Settings, get_settings
@@ -20,6 +22,8 @@ from news_agent.storage.models import Source
 
 
 async def check_credentials(settings: Settings) -> tuple[int, dict[str, Any]]:
+    if settings.market_alert_decision_provider == "openai":
+        return await _check_openai_credentials(settings)
     key = settings.openrouter_api_key.get_secret_value().strip()
     if not key:
         return 2, {"status": "missing", "explanation": "Set OPENROUTER_API_KEY."}
@@ -63,6 +67,49 @@ async def check_credentials(settings: Settings) -> tuple[int, dict[str, Any]]:
             "status": "unavailable",
             "explanation": "Could not safely verify the key; "
             "check connectivity and retry. No model request was made.",
+        }
+
+
+async def _check_openai_credentials(settings: Settings) -> tuple[int, dict[str, Any]]:
+    report: dict[str, Any] = {
+        "provider": "openai",
+        "model": OPENAI_DECISION_MODEL,
+        "paid_model_request": True,
+    }
+    key = settings.openai_api_key.strip()
+    if not key:
+        return 2, {
+            **report, "status": "missing", "paid_model_request": False,
+            "explanation": "Set OPENAI_API_KEY.",
+        }
+    try:
+        async with OpenAIDecisionClient(key) as client:
+            decision = await client.assess({
+                "purpose": "Synthetic credential check. No market evidence. Choose ignore.",
+                "evidence": [],
+            })
+        return 0, {
+            **report, "status": "valid",
+            "estimated_cost_usd": decision.usage.cost_usd,
+            "explanation": "OpenAI accepted one bounded synthetic decision. "
+            "This paid preflight is outside the alert budget; no alert was created or sent.",
+        }
+    except JevError as exc:
+        if exc.code == "billing_limit" or exc.status_code == 402:
+            status, explanation = "billing_limit", "Check OpenAI project billing limits."
+        elif exc.status_code == 401:
+            status, explanation = "unauthorized", "OpenAI rejected the key. Check OPENAI_API_KEY."
+        elif exc.status_code in {403, 404}:
+            status, explanation = "access_denied", "Check OpenAI decision model access."
+        elif exc.status_code == 429:
+            status, explanation = "rate_limited", "OpenAI rate limited the request; retry later."
+        else:
+            status, explanation = "unavailable", "OpenAI check failed; check service access."
+        return 2, {**report, "status": status, "explanation": explanation}
+    except Exception:
+        return 2, {
+            **report, "status": "unavailable",
+            "explanation": "Could not safely verify OpenAI decision access; check connectivity.",
         }
 
 
@@ -138,6 +185,9 @@ async def inspect_storage(factory: Any) -> dict[str, Any]:
 
 async def run(args: argparse.Namespace, settings: Settings) -> tuple[int, dict[str, Any]]:
     if args.command == "check-credentials":
+        settings = resolve_alert_settings(settings)
+        if provider := getattr(args, "provider", None):
+            settings = settings.model_copy(update={"market_alert_decision_provider": provider})
         return await check_credentials(settings)
     if args.command == "once":
         settings = resolve_alert_settings(settings)
@@ -170,7 +220,13 @@ async def run(args: argparse.Namespace, settings: Settings) -> tuple[int, dict[s
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Inspect and operate market alerts safely.")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("check-credentials", help="Check the OpenRouter key without inference.")
+    credentials = commands.add_parser(
+        "check-credentials",
+        help="OpenAI: one paid synthetic decision. Jev: key-only check.",
+    )
+    credentials.add_argument(
+        "--provider", choices=("jev", "openai"), help="Override for preflight.",
+    )
     commands.add_parser("inspect", help="Show database counts and delivery statuses.")
     commands.add_parser("once", help="Collect, assess, and dispatch once using configured policy.")
     cleanup = commands.add_parser("cleanup-unauthorized", help="Disable confirmed 401 sources.")

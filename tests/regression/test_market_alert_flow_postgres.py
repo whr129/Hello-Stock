@@ -1,4 +1,4 @@
-"""Isolated PostgreSQL full-flow checks; Jev and Telegram are always fake."""
+"""Isolated PostgreSQL full-flow checks with simulated Decisions and Telegram."""
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -14,6 +14,7 @@ from test_alert_storage_postgres import URL, sessions  # noqa: F401
 from news_agent.alerts.collector import FastNewsCollector
 from news_agent.alerts.decision import JevDecision, JevError, JevUsage
 from news_agent.alerts.delivery import MarketAlertDispatcher
+from news_agent.alerts.openai_decision import OPENAI_DECISION_PROMPT_VERSION
 from news_agent.alerts.service import MarketAlertService
 from news_agent.alerts.storage import MarketAlertDecision, MarketAlertDelivery
 from news_agent.ingestion.providers import NormalizedIngestItem
@@ -151,6 +152,54 @@ async def test_fresh_ingestion_decision_delivery_daily_context_and_poll_dedup(fl
         assert len(decisions) == len(deliveries) == 1
         assert decisions[0].status == "completed"
         assert deliveries[0].status == "delivered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shadow", [True, False])
+async def test_openai_decision_respects_shadow_mode_and_survives_outbox_recheck(flow, shadow):
+    settings = flow.settings.model_copy(update={
+        "market_alert_decision_provider": "openai",
+        "market_alert_shadow_mode": shadow,
+        "openai_api_key": "fake-openai-key",
+        "openrouter_api_key": SecretStr(""),
+    })
+    flow.client.assess.return_value = flow.judgment.model_copy(update={
+        "provider": "openai",
+        "model": "gpt-6-luna",
+        "request_id": "req_synthetic",
+        "prompt_version": OPENAI_DECISION_PROMPT_VERSION,
+    })
+    service = MarketAlertService(flow.sessions, settings, flow.client, started_at=flow.now)
+    assert (await service.process_once())["immediate_alert" if shadow else "queued"] == 1
+    async with flow.sessions() as session:
+        decision = (await session.scalars(select(MarketAlertDecision))).one()
+        assert decision.result["judgment"]["provider"] == "openai"
+        assert decision.result["judgment"]["request_id"] == "req_synthetic"
+        assert decision.model_revision.startswith("openai:")
+    assert await flow.dispatcher.dispatch_once() == int(not shadow)
+    assert await flow.dispatcher.dispatch_once() == 0
+    assert len(flow.sent) == int(not shadow)
+
+
+@pytest.mark.asyncio
+async def test_switching_provider_keeps_existing_alert_idempotency(flow):
+    await flow.service.process_once()
+    assert await flow.dispatcher.dispatch_once() == 1
+    settings = flow.settings.model_copy(update={
+        "market_alert_decision_provider": "openai", "openai_api_key": "fake-openai-key"
+    })
+    flow.client.assess.return_value = flow.judgment.model_copy(update={
+        "provider": "openai",
+        "model": "gpt-6-luna",
+        "prompt_version": OPENAI_DECISION_PROMPT_VERSION,
+    })
+    service = MarketAlertService(flow.sessions, settings, flow.client, started_at=flow.now)
+    await service.process_once()
+    assert await flow.dispatcher.dispatch_once() == 0
+    assert len(flow.sent) == 1
+    async with flow.sessions() as session:
+        decisions = (await session.scalars(select(MarketAlertDecision))).all()
+        assert {row.result["judgment"]["provider"] for row in decisions} == {"jev", "openai"}
 
 
 @pytest.mark.asyncio

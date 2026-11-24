@@ -1,4 +1,4 @@
-"""Committed evidence -> budgeted Jev decisions -> durable delivery requests."""
+"""Committed evidence -> budgeted model decisions -> durable delivery requests."""
 
 from __future__ import annotations
 
@@ -30,7 +30,14 @@ from news_agent.alerts.evidence import (
     provider_observations,
     same_event,
 )
+from news_agent.alerts.openai_decision import (
+    OPENAI_DECISION_INPUT_PRICE_PER_MILLION,
+    OPENAI_DECISION_MODEL,
+    OPENAI_DECISION_PROMPT_VERSION,
+    OpenAIDecisionClient,
+)
 from news_agent.alerts.policy import (
+    DeliveryGuard,
     DeliveryPolicyConfig,
     format_alert,
     guard_delivery,
@@ -128,14 +135,29 @@ class MarketAlertService:
         self.factory, self.settings = factory, settings
         self.repository_type = repository_type
         self.started_at = started_at or datetime.now(UTC)
-        self.client = client or JevClient(
-            JevConfig(
-                api_key=settings.openrouter_api_key,
-                model=settings.jev_model,
-                timeout_seconds=settings.jev_timeout_seconds,
-                max_attempts=1,
+        self.provider = settings.market_alert_decision_provider
+        if self.provider == "openai":
+            key = settings.openai_api_key
+            model = f"openai:{OPENAI_DECISION_MODEL}"
+            prompt_version = OPENAI_DECISION_PROMPT_VERSION
+            self.input_price = OPENAI_DECISION_INPUT_PRICE_PER_MILLION
+            self.client = client if client is not None else OpenAIDecisionClient(
+                key, timeout_seconds=settings.jev_timeout_seconds
             )
-        )
+        else:
+            key = settings.openrouter_api_key.get_secret_value()
+            model = settings.jev_model
+            prompt_version = PROMPT_VERSION
+            self.input_price = JEV_INPUT_PRICE_PER_MILLION
+            self.client = client if client is not None else JevClient(
+                JevConfig(
+                    api_key=settings.openrouter_api_key,
+                    model=settings.jev_model,
+                    timeout_seconds=settings.jev_timeout_seconds,
+                    max_attempts=1,
+                )
+            )
+        self._has_decision_key = bool(key.strip())
         self._owns_client = client is None
         self.policy = DeliveryPolicyConfig.from_settings(settings)
         self.extractor = MentionExtractor(
@@ -154,17 +176,15 @@ class MarketAlertService:
             allowed.clear()
         self.allowed = allowed
         self.revision = (
-            settings.jev_model
+            model
             + ":"
             + _digest(
                 [
-                    PROMPT_VERSION,
+                    prompt_version,
                     harness.revision,
                     settings.jev_monthly_budget_usd,
                     settings.jev_request_reserve_usd,
-                    hashlib.sha256(
-                        settings.openrouter_api_key.get_secret_value().encode()
-                    ).hexdigest(),
+                    hashlib.sha256(key.encode()).hexdigest(),
                 ]
             )[:24]
         )
@@ -172,7 +192,7 @@ class MarketAlertService:
         registry.register(
             CapabilitySpec(
                 id=ALERT_ASSESS_CAPABILITY.id,
-                description="Assess market evidence with Jev",
+                description="Assess market evidence for alert delivery",
                 input_model=AssessmentInput,
                 handler=self._assess,
                 timeout_seconds=settings.jev_timeout_seconds + 2,
@@ -184,6 +204,7 @@ class MarketAlertService:
             limits=profile.execution if profile and profile.execution else harness.execution,
         )
         self._auth_blocked = False
+        self._billing_blocked_until: datetime | None = None
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -359,13 +380,16 @@ class MarketAlertService:
                 events[event.id] = event
             for event in events.values():
                 await self._prepare_event_decision(session, event, now)
-            # A key/configuration revision unblocks still-fresh work without changing
-            # its original failure record or backfilling historical articles.
+            # Key rotation can recover fresh auth failures from this provider.
+            # Switching providers must not replay the other provider's blocked work.
+            provider_prefix = "openai:%" if self.provider == "openai" else "typesafe/jev-%"
             blocked_old = (
                 await session.scalars(
                     select(MarketAlertDecision)
                     .where(
                         MarketAlertDecision.status == "blocked",
+                        MarketAlertDecision.last_error == "authentication",
+                        MarketAlertDecision.model_revision.like(provider_prefix),
                         MarketAlertDecision.model_revision != self.revision,
                         MarketAlertDecision.created_at
                         >= now - timedelta(minutes=self.settings.market_alert_max_age_minutes),
@@ -387,6 +411,9 @@ class MarketAlertService:
         await self._sentiments(now)
         if self._auth_blocked:
             counts["authentication_blocked"] += 1
+            return dict(counts)
+        if self._billing_blocked_until and now < self._billing_blocked_until:
+            counts["billing_blocked"] += 1
             return dict(counts)
         async with self.factory() as session:
             ids = list(
@@ -412,7 +439,7 @@ class MarketAlertService:
         for decision_id in ids:
             outcome = await self._process_decision(decision_id, now)
             counts[outcome] += 1
-            if self._auth_blocked:
+            if self._auth_blocked or outcome == "billing_blocked":
                 break
         return dict(counts)
 
@@ -424,7 +451,7 @@ class MarketAlertService:
         tokens = len(json.dumps(state, ensure_ascii=False).encode()) * len(questions)
         tokens += len(json.dumps(questions).encode()) + 2048 * len(questions)
         return max(
-            self.settings.jev_request_reserve_usd, tokens * JEV_INPUT_PRICE_PER_MILLION / 1_000_000
+            self.settings.jev_request_reserve_usd, tokens * self.input_price / 1_000_000
         )
 
     async def _process_decision(self, decision_id: int, now: datetime) -> str:
@@ -502,7 +529,7 @@ class MarketAlertService:
                 )
                 await session.commit()
                 return "input_too_large"
-            if not self.allowed or not self.settings.openrouter_api_key.get_secret_value():
+            if not self.allowed or not self._has_decision_key:
                 await repo.fail_decision(
                     decision_id,
                     token,
@@ -550,6 +577,9 @@ class MarketAlertService:
         finished = now + timedelta(seconds=time.monotonic() - began)
         if "error" in response:
             self._auth_blocked = response.get("status_code") in (401, 403)
+            billing_blocked = response["error"] == "billing_limit"
+            if billing_blocked:
+                self._billing_blocked_until = finished + timedelta(minutes=15)
             async with self.factory() as session:
                 await self.repository_type(session).fail_decision(
                     decision_id,
@@ -563,7 +593,7 @@ class MarketAlertService:
                     status="failed" if response.get("retryable") else "blocked",
                 )
                 await session.commit()
-            return "failed"
+            return "billing_blocked" if billing_blocked else "failed"
         decision = JevDecision.model_validate(response["decision"])
         async with self.factory() as session:
             await self._lock(session, f"recipient:{self.policy.chat_id}")
@@ -582,10 +612,10 @@ class MarketAlertService:
             same = [
                 row.delivered_at or row.created_at for row in deliveries if row.event_id == event_id
             ]
-            guard = guard_delivery(
+            assessed_guard = guard_delivery(
                 decision,
                 evidence,
-                config=self.policy,
+                config=self.policy.model_copy(update={"shadow_mode": False}),
                 now=finished,
                 last_delivered_at=max(same, default=None),
                 recent_deliveries=[row.delivered_at or row.created_at for row in deliveries],
@@ -599,6 +629,8 @@ class MarketAlertService:
                     ],
                 ),
             )
+            shadow = self.policy.shadow_mode and decision.delivery == "immediate_alert"
+            guard = DeliveryGuard(False, "shadow_mode") if shadow else assessed_guard
             expires_at = max(row.published_at for row in evidence) + timedelta(
                 minutes=self.settings.market_alert_max_age_minutes
             )
@@ -629,6 +661,11 @@ class MarketAlertService:
                     "not_before": guard.not_before.isoformat() if guard.not_before else None,
                 },
             }
+            if shadow:
+                audit["shadow_guard"] = {
+                    "allowed": assessed_guard.allowed,
+                    "reason": assessed_guard.reason,
+                }
             await self.repository_type(session).complete_decision(
                 decision_id,
                 token,
@@ -710,8 +747,15 @@ class MarketAlertService:
                     continue
                 raw = item.result["judgment"]
                 result = JevDecision.model_validate(raw)
+                if result.provider != self.provider:
+                    continue
                 if result.reason_code in {"insufficient_evidence", "stale_or_duplicate"}:
                     continue
+                model = (
+                    f"{result.model}:{result.prompt_version}"
+                    if result.provider == "openai"
+                    else result.model
+                )
                 for record in item.input_payload["state"]["evidence"]:
                     if record["article_id"] not in by_id:
                         continue
@@ -722,18 +766,18 @@ class MarketAlertService:
                         # keep the historical judgment, but do not keep its old vote alive.
                         for ticker in result.sentiments:
                             if ticker in row.tickers:
-                                groups.setdefault((ticker, "jev", result.model), [])
+                                groups.setdefault((ticker, result.provider, model), [])
                         continue
                     if row.trust_score < 0.7:
                         continue
                     for ticker, label in result.sentiments.items():
                         if ticker in row.tickers:
-                            groups[(ticker, "jev", result.model)].append(
+                            groups[(ticker, result.provider, model)].append(
                                 SentimentObservation(
                                     article_id=row.article_id,
                                     ticker=ticker,
-                                    provider="jev",
-                                    model_version=result.model,
+                                    provider=result.provider,
+                                    model_version=model,
                                     label=label,
                                     source_id=row.source_id,
                                     published_at=row.published_at,
@@ -759,7 +803,8 @@ class MarketAlertService:
                     change_threshold=self.settings.sentiment_change_threshold,
                     provider_healthy=(
                         not self._auth_blocked
-                        if provider == "jev"
+                        and not (self._billing_blocked_until and now < self._billing_blocked_until)
+                        if provider == self.provider
                         else provider in healthy_providers
                     ),
                 )

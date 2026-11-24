@@ -129,8 +129,12 @@ def guard_delivery(
     recent = sorted(value for value in recent_deliveries if now - timedelta(hours=1) < value <= now)
     if len(recent) >= config.max_per_hour:
         deadlines.append((recent[-config.max_per_hour] + timedelta(hours=1), "hourly_cap"))
+    # The critical quiet-hours bypass is calibrated only for Jev during the rollout.
     critical = (
-        config.critical_override and decision.materiality >= 2.9 and decision.confidence >= 0.95
+        decision.provider == "jev"
+        and config.critical_override
+        and decision.materiality >= 2.9
+        and decision.confidence >= 0.95
     )
     if config.quiet_start and not critical:
         zone = ZoneInfo(config.timezone)

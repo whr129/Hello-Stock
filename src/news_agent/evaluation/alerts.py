@@ -1,4 +1,4 @@
-"""Opt-in, bounded Jev quality evaluation using synthetic public fixtures only."""
+"""Opt-in, bounded market-alert quality evaluation using synthetic public fixtures only."""
 
 from __future__ import annotations
 
@@ -6,13 +6,14 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import time
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from dotenv import dotenv_values
+from dotenv import dotenv_values, find_dotenv
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from news_agent.alerts.decision import (
@@ -85,15 +86,20 @@ def load_cases(path: Path = DEFAULT_CASES, max_cases: int = 50) -> list[AlertCas
     return cases[:max_cases]
 
 
-def reservation_usd(case: AlertCase) -> float:
+def reservation_usd(case: AlertCase, *, provider: str = "jev") -> float:
     questions = build_questions(case.tickers)
     # Upper bound bytes as tokens, repeated state per question, plus framing headroom.
     tokens = len(json.dumps(case.state, ensure_ascii=False).encode()) * len(questions)
     tokens += len(json.dumps(questions).encode()) + len(questions) * 2048
-    return max(0.001, tokens * JEV_INPUT_PRICE_PER_MILLION / 1_000_000)
+    rate = JEV_INPUT_PRICE_PER_MILLION
+    if provider == "openai":
+        from news_agent.alerts.openai_decision import OPENAI_DECISION_INPUT_PRICE_PER_MILLION
+
+        rate = OPENAI_DECISION_INPUT_PRICE_PER_MILLION
+    return max(0.001, tokens * rate / 1_000_000)
 
 
-def summarize(rows: list[dict], *, expected_cases: int) -> dict[str, Any]:
+def summarize(rows: list[dict], *, expected_cases: int, provider: str = "jev") -> dict[str, Any]:
     successful = [row for row in rows if row.get("decision")]
     failures = [row for row in rows if row.get("error")]
     covered = [row for row in successful if row["decision"]["confidence"] >= CONFIDENCE_THRESHOLD]
@@ -137,9 +143,16 @@ def summarize(rows: list[dict], *, expected_cases: int) -> dict[str, Any]:
         and accuracy is not None
         and accuracy >= 0.9
     )
+    prompt_version = PROMPT_VERSION
+    if provider == "openai":
+        from news_agent.alerts.openai_decision import OPENAI_DECISION_PROMPT_VERSION
+
+        prompt_version = OPENAI_DECISION_PROMPT_VERSION
+        gate = gate and bool(expected_urgent and host_true / expected_urgent >= 0.8)
     return {
         "mode": "live_provider",
-        "prompt_version": PROMPT_VERSION,
+        "provider": provider,
+        "prompt_version": prompt_version,
         "cases_expected": expected_cases,
         "cases_attempted": len(rows),
         "cases_completed": len(successful),
@@ -163,15 +176,22 @@ def summarize(rows: list[dict], *, expected_cases: int) -> dict[str, Any]:
         else None,
         "sentiment_by_label": labels,
         "reported_cost_usd": sum(row.get("reported_cost_usd") or 0 for row in rows),
+        "estimated_cost_usd": sum(row.get("estimated_cost_usd") or 0 for row in rows),
+        "cost_basis": "estimated" if provider == "openai" else "reported",
         "budget_consumed_usd": sum(row["budget_consumed_usd"] for row in rows),
-        "cost_missing_count": sum(row.get("reported_cost_usd") is None for row in rows),
+        "cost_missing_count": sum(
+            row.get("estimated_cost_usd" if provider == "openai" else "reported_cost_usd")
+            is None
+            for row in rows
+        ),
         "input_tokens": sum(row.get("input_tokens", 0) for row in rows),
         "output_tokens": sum(row.get("output_tokens", 0) for row in rows),
         "model_versions": sorted({row["decision"]["model"] for row in successful}),
         "quality_gate_passed": gate,
         "gate_criteria": "Complete live corpus; route accuracy >=90%; raw, host-eligible, "
         "and confidence-qualified "
-        "urgent precision >=90%; at least one urgent prediction in each group.",
+        "urgent precision >=90%; at least one urgent prediction in each group."
+        + (" OpenAI host-eligible urgent recall >=80%." if provider == "openai" else ""),
         "limitations": "Synthetic diagnostic corpus, not production prevalence or calibrated "
         "confidence. Explicit as_of/history context is supplied. No trade outcomes, "
         "source verification, Telegram, or database evaluated. Host guards run on fixture "
@@ -180,8 +200,15 @@ def summarize(rows: list[dict], *, expected_cases: int) -> dict[str, Any]:
 
 
 async def evaluate_cases(
-    cases: list[AlertCase], client: Any, *, max_cost_usd: float, host_confidence: float = 0.85
+    cases: list[AlertCase],
+    client: Any,
+    *,
+    max_cost_usd: float,
+    host_confidence: float = 0.85,
+    provider: str = "jev",
 ) -> tuple[list, dict]:
+    if provider not in {"openai", "jev"}:
+        raise ValueError("Provider must be openai or jev")
     if not 0 < max_cost_usd <= 0.10:
         raise ValueError("Live evaluation spending cap must be positive and no more than USD 0.10")
     if not 0 <= host_confidence <= 1 or not 1 <= len(cases) <= 50:
@@ -190,12 +217,14 @@ async def evaluate_cases(
     consumed = 0.0
     stop_reason = None
     for case in cases:
-        reserve = reservation_usd(case)
+        reserve = reservation_usd(case, provider=provider)
         if consumed + reserve > max_cost_usd:
             stop_reason = "budget_guard"
             break
         row = {
             "id": case.id,
+            "provider": provider,
+            "cost_basis": "estimated" if provider == "openai" else "reported",
             "category": case.category,
             "expected_delivery": case.expected_delivery,
             "expected_sentiments": case.expected_sentiments,
@@ -248,7 +277,8 @@ async def evaluate_cases(
             }
             row.update(
                 decision=decision.model_dump(mode="json"),
-                reported_cost_usd=decision.usage.cost,
+                reported_cost_usd=decision.usage.cost if provider == "jev" else None,
+                estimated_cost_usd=decision.usage.cost if provider == "openai" else None,
                 input_tokens=decision.usage.input_tokens,
                 output_tokens=decision.usage.output_tokens,
                 budget_consumed_usd=decision.usage.cost
@@ -260,12 +290,13 @@ async def evaluate_cases(
             row.update(
                 error=error.code,
                 status_code=error.status_code,
-                reported_cost_usd=actual,
+                reported_cost_usd=actual if provider == "jev" else None,
+                estimated_cost_usd=actual if provider == "openai" else None,
                 input_tokens=error.usage.input_tokens if error.usage else 0,
                 output_tokens=error.usage.output_tokens if error.usage else 0,
                 budget_consumed_usd=actual if actual is not None else reserve,
             )
-            if error.status_code in (401, 403, 402):
+            if error.code == "billing_limit" or error.status_code in (401, 403, 402):
                 stop_reason = "provider_auth_or_credit"
         if isinstance(client, EvaluationJevClient):
             row["provider_response"] = client.last_response
@@ -273,10 +304,10 @@ async def evaluate_cases(
         rows.append(row)
         consumed += row["budget_consumed_usd"]
         if consumed > max_cost_usd:
-            stop_reason = "provider_reported_cost_exceeded_reservation"
+            stop_reason = "cost_exceeded_reservation"
         if stop_reason:
             break
-    summary = summarize(rows, expected_cases=len(cases))
+    summary = summarize(rows, expected_cases=len(cases), provider=provider)
     expected_urgent = sum(case.expected_delivery == "immediate_alert" for case in cases)
     summary["urgent_expected"] = expected_urgent
     for prefix in ("urgent", "confident_urgent", "host_urgent"):
@@ -303,6 +334,8 @@ async def evaluate_cases(
         and summary["host_urgent_precision"] >= 0.9
         and (summary["host_urgent_recall"] or 0) >= 0.8
     )
+    if provider == "openai":
+        summary["quality_gate_passed"] &= summary["host_precision_recall_target_passed"]
     return rows, summary
 
 
@@ -336,7 +369,9 @@ def write_reports(rows: list[dict], summary: dict, output: Path) -> tuple[Path, 
         f"{summary['host_urgent_recall']}",
         f"Confidence coverage: {summary['confidence_coverage']}",
         f"Sentiment accuracy: {summary['sentiment_accuracy']}",
+        f"Provider: {summary['provider']}",
         f"Provider-reported cost: USD {summary['reported_cost_usd']:.8f}",
+        f"Estimated cost: USD {summary['estimated_cost_usd']:.8f}",
         f"Provider failures: {summary['provider_failures']}",
         "",
         summary["limitations"],
@@ -358,8 +393,9 @@ def write_reports(rows: list[dict], summary: dict, output: Path) -> tuple[Path, 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--live", action="store_true", help="Explicitly permit bounded paid Jev calls"
+        "--live", action="store_true", help="Explicitly permit bounded paid provider calls"
     )
+    parser.add_argument("--provider", choices=("openai", "jev"), default="openai")
     parser.add_argument("--max-cases", type=int, default=50)
     parser.add_argument("--max-cost-usd", type=float, default=0.10)
     parser.add_argument(
@@ -377,16 +413,25 @@ def main() -> None:
         return
     if not 0 < args.max_cost_usd <= 0.10:
         parser.error("--max-cost-usd must be positive and <=0.10")
-    # Intentionally override the stale inherited process key for this isolated runner only.
-    # Never load/export other project secrets or print credential values.
-    key = dotenv_values(ROOT / ".env").get("OPENROUTER_API_KEY")
+    key_name = "OPENAI_API_KEY" if args.provider == "openai" else "OPENROUTER_API_KEY"
+    key = os.environ.get(key_name) or dotenv_values(find_dotenv(usecwd=True)).get(key_name)
     if not key:
-        parser.error("Project .env OPENROUTER_API_KEY is unavailable")
+        parser.error(f"{key_name} is unavailable in the environment or current-directory .env")
 
     async def run() -> tuple[list, dict]:
-        async with EvaluationJevClient(JevConfig(api_key=key, max_attempts=1)) as client:
+        if args.provider == "openai":
+            from news_agent.alerts.openai_decision import OpenAIDecisionClient
+
+            provider_client = OpenAIDecisionClient(key)
+        else:
+            provider_client = EvaluationJevClient(JevConfig(api_key=key, max_attempts=1))
+        async with provider_client as client:
             return await evaluate_cases(
-                cases, client, max_cost_usd=args.max_cost_usd, host_confidence=args.host_confidence
+                cases,
+                client,
+                max_cost_usd=args.max_cost_usd,
+                host_confidence=args.host_confidence,
+                provider=args.provider,
             )
 
     rows, summary = asyncio.run(run())

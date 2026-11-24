@@ -168,6 +168,10 @@ def test_defer_until_all_limits_clear_and_critical_only_overrides_quiet():
         recent_deliveries=[NOW - timedelta(minutes=5)],
     )
     assert result.reason == "hourly_cap" and not result.allowed
+    result = guard_delivery(
+        decision(materiality=3.0, provider="openai"), [article()], config=limits, now=NOW
+    )
+    assert result.reason == "quiet_hours" and not result.allowed
 
 
 def test_format_only_uses_evidence_and_typed_reason():
